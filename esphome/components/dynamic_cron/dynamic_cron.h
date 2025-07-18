@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include <croncpp.h>
+#include <ccronexpr.h>
 #include <iostream>
 #include <iomanip>
 #include <string>
@@ -621,29 +621,24 @@ protected:
 
     for (auto& item: crontabs)
     {
-      try {
-        auto cron_obj = cron::make_cron(item);
-        std::time_t next = cron::cron_next(cron_obj, _ref_time);
-        start_times.push_back(next);
-      }
-      catch (cron::bad_cronexpr const &ex) {
-        LOGW("Not a valid cron expression '%s' %s", item.c_str(), ex.what());
-        
-        std::string msg;
-        if ((std::string)ex.what() == "stoul") {
-          msg = "not a valid cron expression";
-        }
-        else {
-          msg = ex.what();
-        }
+      cron_expr expr;
+      const char *err = 0;
+      cron_parse_expr(item.c_str(), &expr, &err);
+      if (err != 0) {
+        LOGW("Not a valid cron expression '%s' %s", item.c_str(), err);
         
         bad_cron_expr = "'";
         bad_cron_expr += item;
         bad_cron_expr += "' ";
-        bad_cron_expr += msg;
+        bad_cron_expr += err;
         
         return {(std::time_t)0};
       }
+      std::time_t next = cron_next(&expr, _ref_time);
+      if (next == -1)
+        return {(std::time_t)0};
+
+      start_times.push_back(next);
     }
     
     bad_cron_expr = "";

@@ -34,12 +34,13 @@ CONF_CRONTAB_TEXT         = "crontab_text"
 ### cg.add() puts code at top of main.cpp setup() function.
 ### cg.add_global() puts code at top of main.cpp.
 
-cg.add_build_flag("-fexceptions")
-cg.add_platformio_option("build_unflags", ["-fno-exceptions"])
+# But not with ccronexpr
+# cg.add_build_flag("-fexceptions")
+# cg.add_platformio_option("build_unflags", ["-fno-exceptions"])
 
 cg.add_library(
-    name="Croncpp",
-    repository="https://github.com/mariusbancila/croncpp.git",
+    name="ccronexpr",
+    repository="http://github.com/warthog618/ccronexpr.git",
     version=None,
 )
 
