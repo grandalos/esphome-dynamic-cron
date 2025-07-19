@@ -45,7 +45,7 @@ public:
 };  // class ScheduleEsphomeMock
 
 
-// TESTS - covers portions of dyncamic_cron that interact directly with esphome functions and classes.
+// TESTS - covers portions of dynamic_cron that interact directly with esphome functions and classes.
 
 void test_prefs_initial(void) {
   ScheduleEsphomeMock schedule;

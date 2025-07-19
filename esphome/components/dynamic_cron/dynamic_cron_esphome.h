@@ -1,11 +1,7 @@
 //
-// TODO: Consider saving the prefs object within the Schedule, instead of loading it up every run though the loop.
-//       Then compare Schedule fields against that prefs object, instead of against a new prefs object every time
-//       through the loop. Then whenever you save anything to prefs NVS, get a new prefs object to store in the Schedule.
-//
-// TODO: The cronnext value showing in esphome, after an OTA update, is incorrect,
+// TODO: The next_expiry value showing in esphome, after an OTA update, is incorrect,
 //       until the crontab string is changed, or the device is rebooted.
-//       Note that the optional display of the multiple cronnext values is NOT incorrect
+//       Note that the optional display of the multiple next_expiry values is NOT incorrect
 //       at any point during this issue.
 //       It is not known if the actual next-start-time is incorrect, or if this is a display issue.
 //
@@ -56,9 +52,6 @@ static bool                            version_logged = false;
 class Schedule : public Component, public ScheduleCore {
 
 protected:
-  // Loop trackers
-  std::time_t                          cron_loop_previous_time;
-  
   // If true, clears prefs at first boot after flash.
   bool                                 clear_prefs;
   
@@ -69,19 +62,17 @@ protected:
   MyPreference<std::time_t>            initial_stamp_pref;
   MyPreference<bool>                   bypass_pref;
   MyPreference<bool>                   remember_next_pref;
-  MyPreference<std::time_t>            cronnext_pref;
+  MyPreference<std::time_t>            next_expiry_pref;
   StringPreference<CRONTAB_MAX_LEN>    crontab_pref;
 
   bool                                 setup_complete;
 
 public:
-  double                               cron_loop_interval; // seconds
-  //double                              save_prefs_interval; // seconds
   
   // These hold pointers to the subcomponents.
   BypassSwitch                         *bypass_switch{nullptr};
   RememberNextSwitch                   *remember_next_switch{nullptr};
-  CronNextSensor                       *cron_next_sensor{nullptr};
+  CronNextSensor                       *next_expiry_sensor{nullptr};
   // TODO: Change CrontabText and crontab_text to CrontabTextField, crontab_text_field
   // Don't forget to update __init__.py
   CrontabText                          *crontab_text{nullptr};
@@ -92,12 +83,12 @@ public:
     
   DEFINE_SETTER(BypassSwitch, bypass_switch)
   DEFINE_SETTER(RememberNextSwitch, remember_next_switch)
-  DEFINE_SETTER(CronNextSensor, cron_next_sensor)
+  DEFINE_SETTER(CronNextSensor, next_expiry_sensor)
   DEFINE_SETTER(CrontabText, crontab_text)
   
   bool                                 last_bypass_state;
   bool                                 last_remember_next_state;
-  std::string                          last_cron_next_state;
+  std::string                          last_next_expiry_state;
   std::string                          last_crontab_text_state;
   
   // Custom constructor method to create Schedule object.
@@ -111,21 +102,20 @@ public:
     bool(*_target_action_fptr)()
   ) :
     ScheduleCore(_name, _id, _target_action_fptr),
-    cron_loop_interval(10),
     clear_prefs(false),
-    setup_complete(false),
     last_bypass_state(false),
     last_remember_next_state(false),
-    last_cron_next_state(""),
+    last_next_expiry_state(""),
     last_crontab_text_state("")
   {
     LOGI("Constructing cron schedule '%s' %s", _name.c_str(), _id.c_str());
-    cron_loop_previous_time = std::time(NULL);
   } // constructor.
 
 
   // Esphome Component overrides
   void setup() override {
+    if (setup_complete || !timeIsValid())
+        return;
 
     if (!version_logged) {
       printVersion();
@@ -159,14 +149,14 @@ public:
     LOGI("Loaded remember_next: %d", remember_next);
     
     // Init CronNext prefs
-    cronnext_pref.init(schedule_id + "_cronnext_" + std::to_string(initial_stamp));
+    next_expiry_pref.init(schedule_id + "_next_expiry_" + std::to_string(initial_stamp));
       if (remember_next && !bypass) {
-        cronnext = cronnext_pref.load_with_default(0);
+        next_expiry = next_expiry_pref.load_with_default(0);
       } else {
-        cronnext_pref.save(0);
-        cronnext = 0;
+        next_expiry_pref.save(0);
+        next_expiry = 0;
       }
-    LOGI("Loaded cronnext: %lld", (long long)cronnext);
+    LOGI("Loaded next_expiry: %lld", (long long)next_expiry);
     
     // Init Crontab prefs
     crontab_pref.init(schedule_id + "_crontab_" + std::to_string(initial_stamp));
@@ -176,61 +166,50 @@ public:
     
     if (timeIsValid()) {
       
-      // Set cronnext if needed
-      //if (!timeIsValid(cronnext) && !bypass) setCronNext();
-      if (!timeIsValid(cronnext)) setCronNext();
+      if (!timeIsValid(next_expiry)) {
+        setNextExpiry();
+      }
       
       // Push values to entity.
       updateEntityData(bypass_switch, last_bypass_state, getBypass());
       updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
-      updateEntityData(cron_next_sensor, last_cron_next_state, cronNextString("---"));
+      updateEntityData(next_expiry_sensor, last_next_expiry_state, cronNextString("---"));
       updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
       
       setup_complete = true;
       LOGD("[setup()] Setup complete for '%s' %s", schedule_name.c_str(), schedule_id.c_str());
     }
-    else {
-      LOGD("[setup()] Setup partially complete for '%s' %s", schedule_name.c_str(), schedule_id.c_str());
-    }
   } // setup()
   
   
   void loop() override {
-    std::time_t now = std::time(NULL);
-    double seconds_since_last_cron_loop = difftime(now, cron_loop_previous_time);
-    //LOGV("Looping: %lld", (long long)now);
-  
-    if (seconds_since_last_cron_loop > cron_loop_interval) {
-      
-      // Only cronLoop() if we're fully set up.
-      if (setup_complete && timeIsValid()) {
-        cronLoop();
-        
-        LOGV("bypass_switch last: %d, crnt: %d", last_bypass_state, getBypass());
-        updateEntityData(bypass_switch, last_bypass_state, getBypass());
-        LOGV("remember_next_switch last: %d, crnt: %d", last_remember_next_state, getRememberNext());
-        updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
-        LOGV("cron_next_sensor last: %s, crnt: %s", last_cron_next_state.c_str(), cronNextString("---").c_str());
-        updateEntityData(cron_next_sensor, last_cron_next_state, cronNextString("---"));
-        LOGV("crontab_text last: %s, crnt: %s", last_crontab_text_state.c_str(), getCrontab().c_str());
-        updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
-      }
-      
-      // Else if time is valid, do stuff and mark setup as complete.
-      // This will only happen 0 or 1 times.
-      else if (timeIsValid()) {
-        setup_complete = true;
-        //if (!timeIsValid(cronnext) && !bypass) setCronNext();
-        if (!timeIsValid(cronnext)) setCronNext();
-        LOGD("[loop()] Setup complete for '%s' %s", schedule_name.c_str(), schedule_id.c_str());
-      }
-      
-      cron_loop_previous_time = std::time(NULL);
-    }
+    if (!timeIsValid())
+        return;
 
-  } // loop()
-  
-  
+    if (!setup_complete)
+        setup();
+
+    if (next_expiry == 0)
+        return;
+
+    std::time_t now = std::time(NULL);
+
+    //LOGV("Looping: %li", now);
+
+    if (std::difftime(now, next_expiry) >= 0)
+      cronAction();
+
+    LOGV("bypass_switch last: %d, crnt: %d", last_bypass_state, getBypass());
+    updateEntityData(bypass_switch, last_bypass_state, getBypass());
+    LOGV("remember_next_switch last: %d, crnt: %d", last_remember_next_state, getRememberNext());
+    updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
+    LOGV("next_expiry_sensor last: %s, crnt: %s", last_next_expiry_state.c_str(), cronNextString("---").c_str());
+    updateEntityData(next_expiry_sensor, last_next_expiry_state, cronNextString("---"));
+    LOGV("crontab_text last: %s, crnt: %s", last_crontab_text_state.c_str(), getCrontab().c_str());
+    updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
+  }
+
+
   void dump_config() override {
     // This method will trigger once for each schedule loaded by esphome,
     // but it does not trigger when running the tests.
@@ -248,7 +227,7 @@ public:
   // Overides base setters to include preference storage.
   
   bool setBypass(bool val) override {
-    // Note that sched-core setBypass() always calls setCronNext().
+    // Note that sched-core setBypass() always calls setNextExpiry().
     bool rslt = ScheduleCore::setBypass(val);
     updateEntityData(bypass_switch, last_bypass_state, rslt);
     bypass_pref.save(rslt);
@@ -258,67 +237,48 @@ public:
   bool setRememberNext(bool val) override {
     bool rslt = ScheduleCore::setRememberNext(val);
     remember_next_pref.save(rslt);
-    // If remember_next is toggled, we always want to write something to cronnext_pref,
-    // unless bypass is true (if bypass is true, cronnext and cronnext_pref should always be 0).
+    // If remember_next is toggled, we always want to write something to next_expiry_pref,
+    // unless bypass is true (if bypass is true, next_expiry and next_expiry_pref should always be 0).
     updateEntityData(remember_next_switch, last_remember_next_state, rslt);
     if (!bypass) {
       if (remember_next == false) {
-        cronnext_pref.save(0);
+        next_expiry_pref.save(0);
       }
       else {
-        cronnext_pref.save(cronnext);
+        next_expiry_pref.save(next_expiry);
       }
     }
     return rslt;
   }
   
-  std::time_t setCronNext() override {
-    std::time_t rslt = ScheduleCore::setCronNext();
-    updateEntityData(cron_next_sensor, last_cron_next_state, cronNextString("---"));
-    // If cronnext is changed, we only save it to prefs if remember next, or if it's 0.
-    if (rslt == 0 || remember_next) cronnext_pref.save(rslt);
-    return rslt;
+  void setNextExpiry() override {
+    ScheduleCore::setNextExpiry();
+    updateEntityData(next_expiry_sensor, last_next_expiry_state, cronNextString("---"));
+    // If next_expiry is changed, we only save it to prefs if remember next, or if it's 0.
+    if (next_expiry == 0 || remember_next)
+        next_expiry_pref.save(next_expiry);
   }
   
   std::string setCrontab(std::string str) override {
-    // Note that sched-core setCrontab() always calls setCronNext().
+    // Note that sched-core setCrontab() always calls setNextExpiry().
     std::string rslt = ScheduleCore::setCrontab(str);
     updateEntityData(crontab_text, last_crontab_text_state,rslt);
     crontab_pref.save(rslt);
     return rslt;
   }
   
-  // TODO: Handle 'setCronNext(std::time_t input)' signature, when we start using it.
+  // TODO: Handle 'setNextExpiry(std::time_t input)' signature, when we start using it.
   
   
 protected:
   
   // Wrapper around ScheduleCore::timeIsValid()
   // Adds validating time against ESPTime
-  //
-  // NOTE: All callable log lines in this method could run many
-  //       times per second, if conditions permit. Only enable
-  //       them if necessary for debugging.
-  //
   bool timeIsValid(std::time_t now = std::time(NULL)) {
-    //LOGV("Schedule::timeIsValid() calling ESPTime::from_epoch_local()");
+    if (!ScheduleCore::timeIsValid(now))
+        return false;
     ESPTime esp_time = ESPTime::from_epoch_local(now);
-
-    //LOGV("Schedule::timeIsValid() calling esp_time.is_valid()");
-    bool rslt_esp = esp_time.is_valid();
-
-    //LOGV("Schedule::timeIsValid() calling ScheduleCore::timeIsValid()");
-    bool rslt_parent = ScheduleCore::timeIsValid(now);
-    bool rslt_final = rslt_parent && rslt_esp;
-    
-    // What is this for?
-    //     if (rslt_final) {
-    //       LOGV("timeIsValid() using additional check with ESPTime: %d", rslt_final);
-    //     } else {
-    //       LOGV("timeIsValid() using additional check with ESPTime: %d", rslt_final);
-    //     }
-    
-    return rslt_final;
+    return esp_time.is_valid();
   }
   
   // Method template to update each entity only when data has changed.

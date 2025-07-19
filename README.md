@@ -138,7 +138,7 @@
     Provides the switch control to enable memory of a missed trigger time.
     See ESPHome Switch component documentation for options.
     
-  * **cron_next_sensor**: TextSensor component, *optional* `(auto-generated)`
+  * **next_expiry_sensor**: TextSensor component, *optional* `(auto-generated)`
     
     Provides the display of the cron next run time.
     See ESPHome TextSensor component documentation for options.
@@ -258,7 +258,7 @@
   ### New options for version 0.2.0
   
   It is now possible to customize the control and display entities that show in the web GUI.
-  The new controls are `disabled_switch`, `remember_next_switch`, `cron_next_sensor`, `crontab_text`.
+  The new controls are `disabled_switch`, `remember_next_switch`, `next_expiry_sensor`, `crontab_text`.
   
   See the ESPHome documentation on **Switch**, **TextSensor**, and **Text** components for
   customization options.

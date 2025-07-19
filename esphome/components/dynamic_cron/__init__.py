@@ -27,7 +27,7 @@ CONF_TIME_FORMAT   = 'time_format'
 
 CONF_BYPASS_SWITCH        = "disabled_switch"
 CONF_REMEMBER_NEXT_SWITCH = "remember_next_switch"
-CONF_CRON_NEXT_SENSOR     = "cron_next_sensor"
+CONF_NEXT_EXPIRY_SENSOR   = "next_expiry_sensor"
 CONF_CRONTAB_TEXT         = "crontab_text"
 
 
@@ -68,7 +68,7 @@ CONFIG_SCHEMA = cv.Schema({
     
     cv.Optional(CONF_BYPASS_SWITCH): switch.switch_schema(BypassSwitch),
     cv.Optional(CONF_REMEMBER_NEXT_SWITCH): switch.switch_schema(RememberNextSwitch),
-    cv.Optional(CONF_CRON_NEXT_SENSOR): text_sensor.text_sensor_schema(CronNextSensor),
+    cv.Optional(CONF_NEXT_EXPIRY_SENSOR): text_sensor.text_sensor_schema(CronNextSensor),
     cv.Optional(CONF_CRONTAB_TEXT): text.text_schema(CrontabText),
 }).extend(cv.COMPONENT_SCHEMA)
 
@@ -193,8 +193,8 @@ async def to_code(config):
     
     
     # Next Run sensor (display)
-    if CONF_CRON_NEXT_SENSOR in config:
-      ts_config = config[CONF_CRON_NEXT_SENSOR]
+    if CONF_NEXT_EXPIRY_SENSOR in config:
+      ts_config = config[CONF_NEXT_EXPIRY_SENSOR]
     else:
       ts_config = {
         CONF_NAME:    f'{schedule_name} next run',
@@ -204,7 +204,7 @@ async def to_code(config):
       ts_config = text_sensor.text_sensor_schema(CronNextSensor)(ts_config)
     
     ts = await text_sensor.new_text_sensor(ts_config)
-    cg.add(var.set_cron_next_sensor(ts))
+    cg.add(var.set_next_expiry_sensor(ts))
     cg.add(ts.set_schedule(var))
     
     # Crontab text (data entry field)

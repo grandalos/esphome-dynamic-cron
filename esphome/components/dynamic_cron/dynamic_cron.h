@@ -45,7 +45,7 @@ protected:
   std::string   schedule_name;
   std::string   schedule_id;
   std::string   crontab;
-  std::time_t   cronnext;
+  std::time_t   next_expiry;
   bool          bypass;
   bool          remember_next;
   std::string   id_hash;
@@ -95,7 +95,7 @@ public:
     schedule_id(_id),
     crontab(""),
     crontab_default(""),
-    cronnext(0),
+    next_expiry(0),
     bypass(false),
     bypass_default(false),
     remember_next(false),
@@ -152,21 +152,21 @@ public:
     }
     return nullptr;
   }
-  
-  
+
+
   std::string getName() {
     return schedule_name;
   }
-  
+ 
   std::string getId() {
     return schedule_id;
   }
  
 
-  // Gets human-readable time of cronnext field (not the calc).
+  // Gets human-readable time of next_expiry field (not the calc).
   //
   std::string cronNextString(std::string _default="") {
-    if (cronnext == 0) {
+    if (next_expiry == 0) {
       //std::string str(_default);
       //return str;
       //if (bad_cron_expr != "" && bypass == 0) {
@@ -178,12 +178,12 @@ public:
       }
     }
     else {
-      return timeToString(cronnext);
+      return timeToString(next_expiry);
     }
   }
 
 
-  // Returns multiple sequential cronNextCalc results, as a map of {time_t, cron-next-string}.
+  // Returns multiple sequential calcNextExpiry results, as a map of {time_t, cron-next-string}.
   //
   std::map<std::time_t, std::string> cronNextMap(int count = 1, std::string _crontab = "", std::time_t ref_time = 0) {
 
@@ -197,7 +197,7 @@ public:
     if (_crontab == "" || ref_time == 0) { return out; }
 
     for (int i=count; i > 0; i--) {
-      this_time_t = cronNextCalc(_crontab, this_time_t);
+      this_time_t = calcNextExpiry(_crontab, this_time_t);
       this_time_s = timeToString(this_time_t);
       out.insert({this_time_t, this_time_s});
       LOGV("cronNextMap(...) i: %i, this_time_t: %lld, this_time_s: %s", i, (long long)this_time_t, this_time_s.c_str());
@@ -207,81 +207,44 @@ public:
   }
 
 
-  // Is cronnext time older than now?
-  bool cronNextExpired() {
-    std::time_t now = timeNow();
-    bool out = false;
-    
-    // TODO: Can we drop the crontab=="" condition, so we can manually set cronnext
-    //       without setting a crontab? Or will that break something?
-    //       What happens now, if we set cronnext manually with an empty crontab?
-    
-    //if (crontab == "" || cronnext == 0 || bypass) {
-    if (crontab.length() == 0 || cronnext == 0 || bypass) {
-      out = false;
-    } else {
-      out = (std::difftime(cronnext, now) < 0);
-    }
-    
-    LOGV("cronNextExpired() %d, cronnext: '%s', now: '%s'", out, timeToString(cronnext).c_str(), timeToString(now).c_str());
-    
-    return out;
+  // Getter for next_expiry time_t field.
+  std::time_t getNextExpiry() {
+    return next_expiry;
   }
 
 
-  // Getter for cronnext time_t field.
-  std::time_t getCronNext() {
-    return cronnext;
-  }  
-
-
-  // Sets cronnext time_t from crontab field.
+  // Sets next_expiry time_t from crontab field.
   //
-  virtual std::time_t setCronNext() {
-    if (timeIsValid()) {  // If system time is not valid, skip all of this.
-      LOGV("setCronNext() --> timeIsValid(crnt-time): TRUE");
-      //if (crontab == (std::string)"" || bypass) {
-      if (crontab.length() == 0 || bypass) {
-        cronnext = 0;
-      }
-      else {
-        cronnext = cronNextCalc();
-      }
-      
-      LOGI("Setting next run: %s", timeToString(cronnext).c_str());
-      
-      LOGD("Set cronnext, raw: '%lld', string: '%s'",
-        (long long)cronnext,
-        timeToString(cronnext).c_str()
+  virtual void setNextExpiry() {
+    if (!timeIsValid()) {  // If system time is not valid, skip all of this.
+      LOGW("Set next_expiry failed, crontab: %s, bypass: %d, remember: %d, now: %lld",
+            crontab.c_str(),
+            bypass,
+            remember_next,
+            (long long)timeNow()
       );
-      
-      LOGV("setCronNext() crontab: '%s', bypass: '%d', remember: '%d', now-raw: '%lld', now-str: %s",
-        crontab.c_str(),
-        bypass,
-        remember_next,
-        (long long)timeNow(),
-        timeToString(timeNow()).c_str()
-      );
-      
-
-
+      return;
     }
-  
-    // else {
-    //   LOGW("Set cronnext failed, crontab: '%s', bypass: '%d', remember: '%d', now: '%lld'",
-    //         crontab.c_str(),
-    //         bypass,
-    //         remember_next,
-    //         (long long)timeNow()
-    //   );
-    // }
-  
-    return cronnext;
+    LOGV("setNextExpiry() --> timeIsValid(): TRUE");
+    if (crontab.length() == 0 || bypass) {
+      next_expiry = 0;
+    }
+    else {
+      next_expiry = calcNextExpiry();
+    }
+    LOGD("Set next_expiry vars, crontab: %s, bypass: %d, remember: %d, now: %lld, %s",
+          crontab.c_str(),
+          bypass,
+          remember_next,
+          (long long)timeNow(),
+          timeToString(timeNow()).c_str()
+    );
+    LOGI("Set next_expiry [%lld, %s]", (long long)next_expiry, timeToString(next_expiry).c_str());
   }
 
 
-  // Experimental overload sets cron_next from user input time_t.
-  // The design logic was: if input is valid-time, ! bypass, > now, < cronNextCalc(), then cronnext=input;
+  // Experimental overload sets next_expiry from user input time_t.
+  // The design logic was: if input is valid-time, ! bypass, > now, < calcNextExpiry(), then next_expiry=input;
   // however it might not be exactly that in the code.
   //
   // This is not currently used.
@@ -290,33 +253,34 @@ public:
   // 
   //   std::time_t parsed = stringToTime(input);
   //
-  void setCronNext(std::time_t input) {
+  void setNextExpiry(std::time_t input) {
+    if (bypass)
+        return;
     if (
       timeIsValid() &&
       timeIsValid(input) &&
-      ! bypass &&
       difftime(input, timeNow()) > 0 &&
-      difftime(cronNextCalc(), input) > 0
-      // Why does input need to be < cronNextCalc()?
+      difftime(calcNextExpiry(), input) > 0
+      // Why does input need to be < calcNextExpiry()?
       // It allows a one-off run, while still maintaining a legit crontab schedule.
       // If no crontab exists, then input can be any time in the future. In that case,
-      // we need to make sure to clear out the manuall cronnext after it's used,
+      // we need to make sure to clear out the manual next_expiry after it's used,
       // otherwise it'll trigger with every loop.
     ){
-      cronnext = input;
-      
-      LOGI("Setting cronnext with input [%lld, %s]",
+      next_expiry = input;
+
+      LOGI("Setting next_expiry with input [%lld, %s]",
         (long long)input,
         timeToString(input).c_str()
       );
     }
     else {
-      LOGW("setCronNext(user-input) invalid input or current-time [%lld, %s]",
+      LOGW("setNextExpiry(user-input) invalid input or current-time [%lld, %s]",
         (long long)input,
         timeToString(input).c_str()
       );
-      
-      setCronNext();
+
+      setNextExpiry();
     }
   }
 
@@ -333,7 +297,7 @@ public:
   virtual std::string setCrontab(std::string str) {
     crontab = str;
     LOGI("Set crontab '%s'", crontab.c_str());
-    setCronNext();
+    setNextExpiry();
     return crontab;
   }
 
@@ -348,7 +312,7 @@ public:
   virtual bool setBypass(bool val) {
     bypass = val;
     LOGI("Set bypass '%d'", bypass);
-    setCronNext();
+    setNextExpiry();
     return val;
   }
 
@@ -480,38 +444,17 @@ protected:
       Schedules().push_back(_schedule);
   }
   
-
-  // Calls cronLoop() method of all Schedules().
-  // Deprecated. Now we call cronLoop() from esphome loop() method that's part of every Component instance.
-  static void CronLooper() {
-    SLOGV(LOGTAG, "CronLooper() called");
-    for (auto s : Schedules()) {
-      s->cronLoop();
-    }
-  }
-
-
-  // Compares cronnext with current time and calls lambda.
-  // Calls savePrefs(). Update: savePrefs() no longer called here. See dynamic_cron_esphome.h
-  void cronLoop() {
-    //   if (! timeIsValid(cronnext)) {
-    //     LOGD("cronLoop(): cronnext '%lld' not valid, calling setCronNext()", cronnext);
-    //     setCronNext();
-    //   }
-    
-    if (! bypass && timeIsValid() && cronNextExpired()) {
-      LOGI("%s cron schedule calling action(s)", schedule_name.c_str());
-      bool result = target_action_fptr();
-      if (result) {
-        setCronNext();
-      }
-    }
+  // Performs the target action.
+  void cronAction() {
+    LOGI("%s cron schedule calling action(s)", schedule_name.c_str());
+    bool result = target_action_fptr();
+    if (result)
+      setNextExpiry();
   }
 
 
   // Gets next time_t, given cron expression(s) string in crontab.
-  std::time_t cronNextCalc(std::string _crontab = "", std::time_t ref_time = 0) {
-    //if (_crontab == ""){ _crontab = crontab; }
+  std::time_t calcNextExpiry(std::string _crontab = "", std::time_t ref_time = 0) {
     if (_crontab.length() == 0){ _crontab = crontab; }
     if (ref_time == 0) { ref_time = timeNow(); }
 
@@ -553,45 +496,7 @@ protected:
   //       them if necessary for debugging.
   //
   bool timeIsValid(std::time_t now = std::time(NULL)) {
-    // Disable this for production, otherwise will spit out huge amounts of log.
-    //LOGV("timeIsValid() time: %lld, TIMESTAMP: %lld", (long long)now, (long long)TIMESTAMP);
-    
-    // We previously tested against esptime only.
-    //return id(esptime).now().is_valid();
-    // Now we use it in the Schedule::timeIsValid() function (other file).
-    
-    //     // localtime() can be problematic here if given invalid time.
-    //
-    //     // Gets time independent of esp functions.
-    //     struct tm now_tm;
-    //     now_tm = *localtime(&now);
-    // 
-    //     // 1970 is the start of 'epoch' time.
-    //     // tm_year gives us years sine 1900. 
-    //     bool rslt = (
-    //       now > 0 &&
-    //       (now_tm.tm_year + 1900) > 2019 &&
-    //       std::difftime(now, TIMESTAMP) >= 0
-    //     );
-
-    bool rslt = (
-      now > 0 &&
-      //now > 946684800 &&  // Jan 1, 2000 (safely past epoch start issues)
-      std::difftime(now, 946684800) > 0 &&
-      std::difftime(now, TIMESTAMP) >= 0
-    );
-
-    // Disable this for production, otherwise will spit out huge amounts of log.
-    //LOGV("4-timeIsValid() now: %lld, TIMESTAMP: %lld", (long long)now, (long long)TIMESTAMP);
-    
-    if (! rslt) {
-      LOGV("timeIsValid() FALSE time_t: '%lld', string: '%s'", (long long)now, timeToString(now).c_str());
-    } else {
-      // Disable this for production, otherwise will spit out huge amounts of log.
-      //LOGV("timeIsValid() TRUE with [%lld, %s]", (long long)now, timeToString(now).c_str());
-    };
-    
-    return (rslt);
+    return (std::difftime(now, TIMESTAMP) >= 0);
   }
 
 
@@ -609,15 +514,7 @@ protected:
   //
   std::vector<std::time_t> vectorOfNext(std::vector<std::string> crontabs, std::time_t ref_time = 0) {
     if (ref_time == 0) { ref_time = timeNow(); }
-    std::time_t _ref_time = ref_time;
     std::vector<std::time_t> start_times;
-
-    // Adds seconds to ref_time, just to make sure it's ahead of input ref_time.
-    // To do that, we have to convert to tm and back to time_t.
-    // But it looks like it's not needed!
-    struct tm * timetm = localtime(&_ref_time);
-    //timetm->tm_sec += 5;
-    _ref_time = std::mktime(timetm);
 
     for (auto& item: crontabs)
     {
@@ -634,7 +531,7 @@ protected:
         
         return {(std::time_t)0};
       }
-      std::time_t next = cron_next(&expr, _ref_time);
+      std::time_t next = cron_next(&expr, ref_time);
       if (next == -1)
         return {(std::time_t)0};
 
@@ -644,11 +541,9 @@ protected:
     bad_cron_expr = "";
 
     // Sorts (in-place) vector of start_times values from soonest to furthest.
-    std::sort(start_times.begin(), start_times.end(), [_ref_time](std::time_t& a, std::time_t& b)
+    std::sort(start_times.begin(), start_times.end(), [ref_time](std::time_t& a, std::time_t& b)
       { 
-        double diff_a = std::difftime(a, _ref_time);
-        double diff_b = std::difftime(b, _ref_time);
-        return diff_a<diff_b;
+        return std::difftime(a, b) < 0;
       }
     );  
 

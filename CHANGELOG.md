@@ -1,5 +1,9 @@
 # CHANGELOG.md
 
+## 0.3.0
+
+ - Forked from ginjo
+ - Renamed cron_next_sensor to next_expiry_sensor
 
 ## 0.2.1 (2025-10-04)
 
