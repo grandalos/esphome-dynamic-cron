@@ -1,5 +1,24 @@
 # ESPHome Dynamic Cron Scheduler
 
+## About this branch
+
+  This branch addresses a number of issues I have with the master branch:
+
+  * croncpp does not support '#', 'L' or 'W' expressions.
+  * compile requires exceptions.  Exceptions in embedded suck (IMHO).
+  * cron loop interval results in actions being executed some time AFTER their actual expiry rather than at the precise time.  The crontabs support granularity to the second, but the loop to check for expiry is 10seconds.  Weird.
+  * unnecessary use of vectors.
+
+  To address these points, this branch:
+
+  * switches to using a ccronexpr library that does support the special character expressions.  It is C, rather than C++, but who cares as long as it does the job.  It also doesn't use exceptions (yay) and results in significantly smaller binaries (YMMV).
+  * reworks the cronLoop so the actions are performed ASAP after the next expiry time.
+  * removed the unnecessary use of vectors.
+
+  While these changes could be pulled or ported into ginjo's repsository, I don't have the time nor interest for that at the moment - my focus has been to get something that works as I expect.
+
+## The original/master README
+
   This [ESPHome](https://esphome.io) External Component provides a cron interface for scheduling anything in ESPHome.
   Live editable cron expressions, without requiring re-flash or reboot, set this component
   apart from the built-in ESPHome cron functionality. This component runs entirely on ESPHome
@@ -26,7 +45,7 @@
   version 0.1.1.
   
   This component has one external dependency that is automatically managed:
-  1. [Croncpp](https://github.com/mariusbancila/croncpp) for parsing cron expressions
+  1. [ccronexpr](https://github.com/warthog618/ccronexppr) for parsing cron expressions
   
   See below for more info on the Croncpp library.
   
@@ -39,11 +58,6 @@
   * You should define a `time` component in your ESPHome yaml config, as
     scheduling software needs a reliable time source.
     
-  * When using this library, ESPHome will compile with build-flag `-fexceptions`.
-    This should not be a problem for most ESPHome projects, however
-    there is a possibility of conflict with other external libraries that specifically
-    disable this option.
-
 
 ## Setup
 
