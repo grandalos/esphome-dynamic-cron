@@ -8,7 +8,6 @@
 #include <ctime> // c++ time package
 #include <regex>
 #include <vector>
-#include <algorithm>
 #include <time.h> // C time package
 #include "version.h"
 #include "logger_local.h"
@@ -164,11 +163,8 @@ public:
 
   // Gets human-readable time of next_expiry field (not the calc).
   //
-  std::string cronNextString(std::string _default="") {
+  std::string nextExpiryString(std::string _default="") {
     if (next_expiry == 0) {
-      //std::string str(_default);
-      //return str;
-      //if (bad_cron_expr != "" && bypass == 0) {
       if (bad_cron_expr.length() > 0 && !bypass) {
         return bad_cron_expr;
       }
@@ -439,16 +435,7 @@ protected:
 
     // Requests sorted vector of nexts given crontab parsing string regex.
     std::string regex_str = " *\\| *";
-    auto nexts = vectorOfNext(splitString(_crontab, regex_str), ref_time);
-
-    // Logs next-run for each crontab.
-    // for (auto& item: nexts)
-    // {
-    //   LOGD("Sorted cron-next: %s", timeToString(item).c_str());
-    // }
-
-    // Returns first (soonest) time_t from vector-of-nexts.
-    return nexts[0];
+    return nextCrontabExpiry(splitString(_crontab, regex_str), ref_time);
   }
 
 
@@ -483,13 +470,11 @@ protected:
   }
 
 
-  // Returns sorted vector of next time_t values for given vector-of-crontab-strings,
-  // with one soonest next-time value from each crontab expresion.
-  // The first value in the returned vector is soonest next-time of all the given crontab expressions.
+  // Returns next time_t value for given vector-of-crontab-strings.
   //
-  std::vector<std::time_t> vectorOfNext(std::vector<std::string> crontabs, std::time_t ref_time = 0) {
+  std::time_t nextCrontabExpiry(std::vector<std::string> crontabs, std::time_t ref_time) {
+    std::time_t expiry_time = 0;
     if (ref_time == 0) { ref_time = timeNow(); }
-    std::vector<std::time_t> start_times;
 
     for (auto& item: crontabs)
     {
@@ -504,25 +489,16 @@ protected:
         bad_cron_expr += "' ";
         bad_cron_expr += err;
         
-        return {(std::time_t)0};
+        return 0;
       }
       std::time_t next = cron_next(&expr, ref_time);
-      if (next == -1)
-        return {(std::time_t)0};
-
-      start_times.push_back(next);
+      if ((next != -1) && ((next < expiry_time) || (expiry_time == 0)))
+        expiry_time = next;
     }
     
     bad_cron_expr = "";
 
-    // Sorts (in-place) vector of start_times values from soonest to furthest.
-    std::sort(start_times.begin(), start_times.end(), [ref_time](std::time_t& a, std::time_t& b)
-      { 
-        return std::difftime(a, b) < 0;
-      }
-    );  
-
-    return start_times;
+    return expiry_time;
   }
   
   

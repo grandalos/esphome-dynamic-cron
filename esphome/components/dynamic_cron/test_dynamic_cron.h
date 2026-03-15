@@ -93,7 +93,7 @@ void test_schedule_contains_schedules(void) {
 
 void test_schedule_calculates_next_expiry(void) {
   ScheduleMockInst->setCrontab("1 2 3 * * *");
-  std::string next_expiry = ScheduleMockInst->cronNextString();
+  std::string next_expiry = ScheduleMockInst->nextExpiryString();
   //std::string now = ScheduleMockInst->timeToString(); // What was this for?
   std::string time_only = ScheduleMockInst->getStringVectorMember(next_expiry, " ", 1);
   // Test-message is not supported in the Unity framework provided with platformio.

@@ -39,7 +39,7 @@ namespace dynamic_cron {
 //
 class BypassSwitch;
 class RememberNextSwitch;
-class CronNextSensor;
+class NextExpirySensor;
 class CrontabText;
 
 inline const size_t                    CRONTAB_MAX_LEN = 128;
@@ -72,7 +72,7 @@ public:
   // These hold pointers to the subcomponents.
   BypassSwitch                         *bypass_switch{nullptr};
   RememberNextSwitch                   *remember_next_switch{nullptr};
-  CronNextSensor                       *next_expiry_sensor{nullptr};
+  NextExpirySensor                     *next_expiry_sensor{nullptr};
   // TODO: Change CrontabText and crontab_text to CrontabTextField, crontab_text_field
   // Don't forget to update __init__.py
   CrontabText                          *crontab_text{nullptr};
@@ -83,7 +83,7 @@ public:
     
   DEFINE_SETTER(BypassSwitch, bypass_switch)
   DEFINE_SETTER(RememberNextSwitch, remember_next_switch)
-  DEFINE_SETTER(CronNextSensor, next_expiry_sensor)
+  DEFINE_SETTER(NextExpirySensor, next_expiry_sensor)
   DEFINE_SETTER(CrontabText, crontab_text)
   
   bool                                 last_bypass_state;
@@ -148,7 +148,7 @@ public:
     remember_next = remember_next_pref.load_with_default(remember_next_default);
     LOGI("Loaded remember_next: %d", remember_next);
     
-    // Init CronNext prefs
+    // Init NextExpiry prefs
     next_expiry_pref.init(schedule_id + "_next_expiry_" + std::to_string(initial_stamp));
       if (remember_next && !bypass) {
         next_expiry = next_expiry_pref.load_with_default(0);
@@ -163,7 +163,6 @@ public:
     crontab = crontab_pref.load_with_default(crontab_default);
     LOGI("Loaded crontab: %s", crontab.c_str());
 
-    
     if (timeIsValid()) {
       
       if (!timeIsValid(next_expiry)) {
@@ -173,7 +172,7 @@ public:
       // Push values to entity.
       updateEntityData(bypass_switch, last_bypass_state, getBypass());
       updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
-      updateEntityData(next_expiry_sensor, last_next_expiry_state, cronNextString("---"));
+      updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
       updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
       
       setup_complete = true;
@@ -203,8 +202,8 @@ public:
     updateEntityData(bypass_switch, last_bypass_state, getBypass());
     LOGV("remember_next_switch last: %d, crnt: %d", last_remember_next_state, getRememberNext());
     updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
-    LOGV("next_expiry_sensor last: %s, crnt: %s", last_next_expiry_state.c_str(), cronNextString("---").c_str());
-    updateEntityData(next_expiry_sensor, last_next_expiry_state, cronNextString("---"));
+    LOGV("next_expiry_sensor last: %s, crnt: %s", last_next_expiry_state.c_str(), nextExpiryString("---").c_str());
+    updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
     LOGV("crontab_text last: %s, crnt: %s", last_crontab_text_state.c_str(), getCrontab().c_str());
     updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
   }
@@ -253,7 +252,7 @@ public:
   
   void setNextExpiry() override {
     ScheduleCore::setNextExpiry();
-    updateEntityData(next_expiry_sensor, last_next_expiry_state, cronNextString("---"));
+    updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
     // If next_expiry is changed, we only save it to prefs if remember next, or if it's 0.
     if (next_expiry == 0 || remember_next)
         next_expiry_pref.save(next_expiry);
@@ -355,7 +354,7 @@ public:
 }; // RememberNextSwitch class
 
 
-class CronNextSensor : public text_sensor::TextSensor, public Component, public LoggerLocal<CronNextSensor> {
+class NextExpirySensor : public text_sensor::TextSensor, public Component, public LoggerLocal<NextExpirySensor> {
 public:
   
   Schedule *schedule{nullptr};
@@ -371,7 +370,7 @@ public:
     schedule = _schedule;
   }
 
-}; // CronNextSensor class
+}; // NextExpirySensor class
 
 
 class CrontabText : public text::Text, public Component, public LoggerLocal<CrontabText> {

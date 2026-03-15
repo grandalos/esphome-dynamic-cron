@@ -50,7 +50,7 @@ Schedule            = dynamiccron_ns.class_('Schedule', cg.Component)
 
 BypassSwitch        = dynamiccron_ns.class_('BypassSwitch', switch.Switch, cg.Component)
 RememberNextSwitch  = dynamiccron_ns.class_('RememberNextSwitch', switch.Switch, cg.Component)
-CronNextSensor      = dynamiccron_ns.class_('CronNextSensor', text_sensor.TextSensor, cg.Component)
+NextExpirySensor    = dynamiccron_ns.class_('NextExpirySensor', text_sensor.TextSensor, cg.Component)
 CrontabText         = dynamiccron_ns.class_('CrontabText', text.Text, cg.Component)
 
 
@@ -68,7 +68,7 @@ CONFIG_SCHEMA = cv.Schema({
     
     cv.Optional(CONF_BYPASS_SWITCH): switch.switch_schema(BypassSwitch),
     cv.Optional(CONF_REMEMBER_NEXT_SWITCH): switch.switch_schema(RememberNextSwitch),
-    cv.Optional(CONF_NEXT_EXPIRY_SENSOR): text_sensor.text_sensor_schema(CronNextSensor),
+    cv.Optional(CONF_NEXT_EXPIRY_SENSOR): text_sensor.text_sensor_schema(NextExpirySensor),
     cv.Optional(CONF_CRONTAB_TEXT): text.text_schema(CrontabText),
 }).extend(cv.COMPONENT_SCHEMA)
 
@@ -201,7 +201,7 @@ async def to_code(config):
         CONF_ID:      f'{id_}_next_run',
         CONF_ICON:    "mdi:timer-outline"
       }
-      ts_config = text_sensor.text_sensor_schema(CronNextSensor)(ts_config)
+      ts_config = text_sensor.text_sensor_schema(NextExpirySensor)(ts_config)
     
     ts = await text_sensor.new_text_sensor(ts_config)
     cg.add(var.set_next_expiry_sensor(ts))
