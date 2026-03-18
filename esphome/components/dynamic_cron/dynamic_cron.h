@@ -6,7 +6,6 @@
 #include <iomanip>
 #include <string>
 #include <ctime> // c++ time package
-#include <regex>
 #include <vector>
 #include <time.h> // C time package
 #include "version.h"
@@ -187,28 +186,29 @@ public:
   // Sets next_expiry time_t from crontab field.
   //
   virtual void setNextExpiry() {
-    if (!timeIsValid()) {  // If system time is not valid, skip all of this.
+    std::time_t now = std::time(NULL);
+    if (!timeIsValid(now)) {  // If system time is not valid, skip all of this.
       LOGW("Set next_expiry failed, crontab: %s, bypass: %d, remember: %d, now: %lld",
             crontab.c_str(),
             bypass,
             remember_next,
-            (long long)timeNow()
+            (long long)now
       );
       return;
     }
     LOGV("setNextExpiry() --> timeIsValid(): TRUE");
-    if (crontab.length() == 0 || bypass) {
+    if (bypass) {
       next_expiry = 0;
     }
     else {
-      next_expiry = calcNextExpiry();
+      next_expiry = calcNextExpiry(now);
     }
     LOGD("Set next_expiry vars, crontab: %s, bypass: %d, remember: %d, now: %lld, %s",
           crontab.c_str(),
           bypass,
           remember_next,
-          (long long)timeNow(),
-          timeToString(timeNow()).c_str()
+          (long long)now,
+          timeToString(now).c_str()
     );
     LOGI("Set next_expiry [%lld, %s]", (long long)next_expiry, timeToString(next_expiry).c_str());
   }
@@ -227,11 +227,12 @@ public:
   void setNextExpiry(std::time_t input) {
     if (bypass)
         return;
+    std::time_t now = std::time(NULL);
     if (
-      timeIsValid() &&
+      timeIsValid(now) &&
       timeIsValid(input) &&
-      difftime(input, timeNow()) > 0 &&
-      difftime(calcNextExpiry(), input) > 0
+      difftime(input, now) > 0 &&
+      difftime(calcNextExpiry(now), input) > 0
       // Why does input need to be < calcNextExpiry()?
       // It allows a one-off run, while still maintaining a legit crontab schedule.
       // If no crontab exists, then input can be any time in the future. In that case,
@@ -363,7 +364,7 @@ public:
       timetm = localtime(&timet);
       char str[24];
       strftime(str, sizeof(str), _format.c_str(), timetm);
-      
+
       //SLOGVV("dynamic_cron", "From inside timeToString() '%s'", str);
       return (std::string)str;
     }
@@ -425,83 +426,55 @@ protected:
 
 
   // Gets next time_t, given cron expression(s) string in crontab.
-  std::time_t calcNextExpiry(std::string _crontab = "", std::time_t ref_time = 0) {
-    if (_crontab.length() == 0){ _crontab = crontab; }
-    if (ref_time == 0) { ref_time = timeNow(); }
+  std::time_t calcNextExpiry(std::time_t ref_time) {
+    if (crontab.length() == 0 || ref_time == 0)
+        return 0;
+    size_t start = 0, end = 0;
+    std::time_t expiry_time = 0;
 
-    // Returns 0 if no crontab or ref_time.
-    //if (_crontab == "" || ref_time == 0) { return 0; }
-    if (_crontab.length() == 0 || ref_time == 0) { return 0; }
+    while (1) {
+      end = crontab.find(" | ", start);
+      auto count = (end == std::string::npos) ? end : start - end;
+      std::string ctab = crontab.substr(start, count);
+      cron_expr expr;
+      const char *err = 0;
+      cron_parse_expr(ctab.c_str(), &expr, &err);
+      if (err != 0) {
+        LOGW("Not a valid cron expression '%s' %s", ctab.c_str(), err);
 
-    // Requests sorted vector of nexts given crontab parsing string regex.
-    std::string regex_str = " *\\| *";
-    return nextCrontabExpiry(splitString(_crontab, regex_str), ref_time);
-  }
+        bad_cron_expr = "'";
+        bad_cron_expr += ctab;
+        bad_cron_expr += "' ";
+        bad_cron_expr += err;
 
-
-  // Returns current time as time_t.
-  // TODO: Do we really need this?
-  // I guess it's a way to encapsulate a standard way of getting current time.
-  std::time_t timeNow() {
-    return std::time(NULL);
+        return 0;
+      }
+      LOGI("crontab parses");
+      // !!! crashes here in 2026.3 days_to_year or thereabouts.
+      std::time_t next = cron_next(&expr, ref_time);  // <--- never returns??
+      LOGD("calced next: %lld, (%lld)", (long long)next, (long long)expiry_time);
+      if ((next != -1) && ((next < expiry_time) || (expiry_time == 0)))
+        expiry_time = next;
+      if (end == std::string::npos)
+          break;
+      start = end + 3; // + " | ".length()
+    }
+    bad_cron_expr = "";
+    LOGD("calced expiry_time: %lld", (long long)expiry_time);    
+    return expiry_time;
   }
 
 
   // Is current (or given) time valid (synced & legit)?
   // Even if it's a valid system time, it must be within a reasonable range,
   // so it can't be 0 (1969, 1970, something like that, depending on locale).
-  // We check with ESPHome, if it's loaded, but we always fall back to core system time.
   //
-  //
-  // NOTE: All callable log lines in this method could run many
-  //       times per second, if conditions permit. Only enable
-  //       them if necessary for debugging.
   //
   bool timeIsValid(std::time_t now = std::time(NULL)) {
     return (std::difftime(now, TIMESTAMP) >= 0);
   }
 
 
-  // Function to split std::string on regex.
-  std::vector<std::string> splitString(const std::string str, const std::string regex_str) {
-      std::regex regexz(regex_str);
-      return {std::sregex_token_iterator(str.begin(), str.end(), regexz, -1),
-              std::sregex_token_iterator()};
-  }
-
-
-  // Returns next time_t value for given vector-of-crontab-strings.
-  //
-  std::time_t nextCrontabExpiry(std::vector<std::string> crontabs, std::time_t ref_time) {
-    std::time_t expiry_time = 0;
-    if (ref_time == 0) { ref_time = timeNow(); }
-
-    for (auto& item: crontabs)
-    {
-      cron_expr expr;
-      const char *err = 0;
-      cron_parse_expr(item.c_str(), &expr, &err);
-      if (err != 0) {
-        LOGW("Not a valid cron expression '%s' %s", item.c_str(), err);
-        
-        bad_cron_expr = "'";
-        bad_cron_expr += item;
-        bad_cron_expr += "' ";
-        bad_cron_expr += err;
-        
-        return 0;
-      }
-      std::time_t next = cron_next(&expr, ref_time);
-      if ((next != -1) && ((next < expiry_time) || (expiry_time == 0)))
-        expiry_time = next;
-    }
-    
-    bad_cron_expr = "";
-
-    return expiry_time;
-  }
-  
-  
   // Creates a hash from a string.
   static std::string GetHash(std::string input, int len = 15) {
     //const std::string input = _input;

@@ -157,32 +157,29 @@ public:
         next_expiry = 0;
       }
     LOGI("Loaded next_expiry: %lld", (long long)next_expiry);
-    
+
     // Init Crontab prefs
     crontab_pref.init(schedule_id + "_crontab_" + std::to_string(initial_stamp));
     crontab = crontab_pref.load_with_default(crontab_default);
     LOGI("Loaded crontab: %s", crontab.c_str());
 
-    if (timeIsValid()) {
-      
-      if (!timeIsValid(next_expiry)) {
-        setNextExpiry();
-      }
-      
-      // Push values to entity.
-      updateEntityData(bypass_switch, last_bypass_state, getBypass());
-      updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
-      updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
-      updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
-      
-      setup_complete = true;
-      LOGD("[setup()] Setup complete for '%s' %s", schedule_name.c_str(), schedule_id.c_str());
-    }
+    if (!timeIsValid(next_expiry))
+      setNextExpiry();
+
+    // Push values to entity.
+    updateEntityData(bypass_switch, last_bypass_state, getBypass());
+    updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
+    updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
+    updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
+
+    setup_complete = true;
+    LOGD("[setup()] Setup complete for '%s' %s", schedule_name.c_str(), schedule_id.c_str());
   } // setup()
   
   
   void loop() override {
-    if (!timeIsValid())
+    std::time_t now = std::time(NULL);
+    if (!timeIsValid(now))
         return;
 
     if (!setup_complete)
@@ -190,8 +187,6 @@ public:
 
     if (next_expiry == 0)
         return;
-
-    std::time_t now = std::time(NULL);
 
     //LOGV("Looping: %li", now);
 
