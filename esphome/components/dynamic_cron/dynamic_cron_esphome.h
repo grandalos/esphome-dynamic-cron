@@ -198,13 +198,9 @@ public:
     if (std::difftime(now, next_expiry) >= 0)
       cronAction();
 
-    LOGV("bypass_switch last: %d, crnt: %d", last_bypass_state, getBypass());
     updateEntityData(bypass_switch, last_bypass_state, getBypass());
-    LOGV("remember_next_switch last: %d, crnt: %d", last_remember_next_state, getRememberNext());
     updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
-    LOGV("next_expiry_sensor last: %s, crnt: %s", last_next_expiry_state.c_str(), nextExpiryString("---").c_str());
     updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
-    LOGV("crontab_text last: %s, crnt: %s", last_crontab_text_state.c_str(), getCrontab().c_str());
     updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
   }
 
@@ -285,10 +281,9 @@ protected:
   //
   template<typename EntityT, typename StateT>
   void updateEntityData(EntityT *entity, StateT &last_state, const StateT &new_state) {
-    if (!entity) return;  // guard against null
-    //LOGD("updateEntityData(%s)", entity->get_object_id().c_str());
+    if (!entity)
+        return;  // guard against null
     if (new_state != last_state) {
-      LOGD("updateEntityData(%s) publishing...", entity->get_object_id().c_str());
       entity->publish_state(new_state);
       last_state = new_state;
     }
@@ -314,7 +309,6 @@ public:
     //set_disabled_by_default(false);
     //set_icon("mdi:timer-off-outline");
     // set_restore_mode(switch_::SWITCH_RESTORE_DISABLED);
-    LOGV("setup(): %s", get_object_id().c_str());
   }
   
   void set_schedule(Schedule *_schedule) {
@@ -339,7 +333,6 @@ public:
     //set_disabled_by_default(false);
     //set_icon("mdi:memory");
     //set_restore_mode(switch_::SWITCH_RESTORE_DISABLED);
-    LOGV("setup(): %s", get_object_id().c_str());
   }
 
   void set_schedule(Schedule *_schedule) {
@@ -363,7 +356,6 @@ public:
   void setup() override {
     //set_disabled_by_default(false);
     //set_icon("mdi:timer-outline");
-    LOGV("setup(): %s", get_object_id().c_str());
   }
   
   void set_schedule(Schedule *_schedule) {
@@ -385,7 +377,6 @@ public:
     traits.set_min_length(0);
     traits.set_max_length(CRONTAB_MAX_LEN);
     traits.set_mode(text::TEXT_MODE_TEXT);
-    LOGV("setup(): %s", get_object_id().c_str());
   }
 
   void set_schedule(Schedule *_schedule) {
