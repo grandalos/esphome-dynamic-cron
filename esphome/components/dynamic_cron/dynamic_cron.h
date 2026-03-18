@@ -140,8 +140,6 @@ public:
   static ScheduleCore* Schedules(std::string _id) {
     if (!Schedules().empty()) {
       for (auto& x : Schedules()) {
-        //if (x->schedule_id == _id) { // compares pointers, which might be different even if value matches.
-        //if (std::strcmp(x->schedule_id, _id) == 0) { // strcmp() is for char* strings.
         if (x->schedule_id == _id) {
           return x;
         }
@@ -251,7 +249,7 @@ public:
         (long long)input,
         timeToString(input).c_str()
       );
-
+      // !!! what is this for??
       setNextExpiry();
     }
   }
@@ -354,11 +352,7 @@ public:
   // See here for printing time_t data:
   //   https://stackoverflow.com/questions/18422384/how-to-print-time-t-in-a-specific-format
   static std::string timeToFormattedString(std::time_t timet, std::string _format = TIME_FORMAT) {
-    // I disabled the timeIsValid() check here to prevent circular definition,
-    // since I want to use timeToString() in the timeIsValid() funcion.
-    // If we need to re-activate timeIsValid() here, remove timeToString() from timeIsValid().
-    //
-    if (timet != 0) {   //timeIsValid()) {
+    if (timet != 0) {
       struct tm * timetm;
       // Converts time_t to tm (a fancy time object), cuz that's what strftime wants.
       timetm = localtime(&timet);

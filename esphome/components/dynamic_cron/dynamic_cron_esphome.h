@@ -244,7 +244,6 @@ public:
   void setNextExpiry() override {
     ScheduleCore::setNextExpiry();
     updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
-    // If next_expiry is changed, we only save it to prefs if remember next, or if it's 0.
     if (next_expiry == 0 || remember_next)
         next_expiry_pref.save(next_expiry);
   }
