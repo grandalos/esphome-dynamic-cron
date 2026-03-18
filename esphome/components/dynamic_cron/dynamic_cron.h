@@ -8,7 +8,6 @@
 #include <ctime> // c++ time package
 #include <regex>
 #include <vector>
-#include <map>
 #include <algorithm>
 #include <time.h> // C time package
 #include "version.h"
@@ -180,30 +179,6 @@ public:
     else {
       return timeToString(next_expiry);
     }
-  }
-
-
-  // Returns multiple sequential calcNextExpiry results, as a map of {time_t, cron-next-string}.
-  //
-  std::map<std::time_t, std::string> cronNextMap(int count = 1, std::string _crontab = "", std::time_t ref_time = 0) {
-
-    if (_crontab == "") { _crontab = crontab; }
-    if (ref_time == 0) { ref_time = timeNow(); }
-
-    std::map<std::time_t, std::string> out {};
-    std::time_t this_time_t = ref_time;
-    std::string this_time_s;
-
-    if (_crontab == "" || ref_time == 0) { return out; }
-
-    for (int i=count; i > 0; i--) {
-      this_time_t = calcNextExpiry(_crontab, this_time_t);
-      this_time_s = timeToString(this_time_t);
-      out.insert({this_time_t, this_time_s});
-      LOGV("cronNextMap(...) i: %i, this_time_t: %lld, this_time_s: %s", i, (long long)this_time_t, this_time_s.c_str());
-    }
-
-    return out;
   }
 
 
