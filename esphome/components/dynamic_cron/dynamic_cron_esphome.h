@@ -10,7 +10,6 @@
 
 #pragma once
 
-//#include "Arduino.h"
 #include <iostream>
 #include <string>
 #include <ctime>
@@ -65,8 +64,6 @@ protected:
   MyPreference<std::time_t>            next_expiry_pref;
   StringPreference<CRONTAB_MAX_LEN>    crontab_pref;
 
-  bool                                 setup_complete;
-
 public:
   
   // These hold pointers to the subcomponents.
@@ -114,9 +111,6 @@ public:
 
   // Esphome Component overrides
   void setup() override {
-    if (setup_complete || !timeIsValid())
-        return;
-
     if (!version_logged) {
       printVersion();
       version_logged = true;
@@ -141,12 +135,10 @@ public:
     // Init Bypass prefs
     bypass_pref.init(schedule_id + "_bypass_" + std::to_string(initial_stamp));
     bypass = bypass_pref.load_with_default(bypass_default);
-    LOGI("Loaded bypass: %d", bypass);
     
     // Init RememberNext prefs
     remember_next_pref.init(schedule_id + "_remember_" + std::to_string(initial_stamp));
     remember_next = remember_next_pref.load_with_default(remember_next_default);
-    LOGI("Loaded remember_next: %d", remember_next);
     
     // Init NextExpiry prefs
     next_expiry_pref.init(schedule_id + "_next_expiry_" + std::to_string(initial_stamp));
@@ -156,12 +148,10 @@ public:
         next_expiry_pref.save(0);
         next_expiry = 0;
       }
-    LOGI("Loaded next_expiry: %lld", (long long)next_expiry);
 
     // Init Crontab prefs
     crontab_pref.init(schedule_id + "_crontab_" + std::to_string(initial_stamp));
     crontab = crontab_pref.load_with_default(crontab_default);
-    LOGI("Loaded crontab: %s", crontab.c_str());
 
     if (!timeIsValid(next_expiry))
       setNextExpiry();
@@ -172,18 +162,21 @@ public:
     updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
     updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
 
-    setup_complete = true;
     LOGD("[setup()] Setup complete for '%s' %s", schedule_name.c_str(), schedule_id.c_str());
   } // setup()
   
   
   void loop() override {
     std::time_t now = std::time(NULL);
-    if (!timeIsValid(now))
+    if (!timeIsValid(now)) {
+        now_is_invalid = true;
         return;
+    }
 
-    if (!setup_complete)
-        setup();
+    if (now_is_invalid) {
+        now_is_invalid = false;
+        setNextExpiry();
+    }
 
     if (next_expiry == 0)
         return;
@@ -201,11 +194,16 @@ public:
 
 
   void dump_config() override {
-    // This method will trigger once for each schedule loaded by esphome,
-    // but it does not trigger when running the tests.
-    //
-    //ESP_LOGCONFIG(LOGTAG, "Dynamic Cron Schedule");
-    //LOGD("Dynamic Cron Schedule ");
+    ESP_LOGCONFIG(LOGTAG,
+                "Dynamic Cron Schedule:\n"
+                "  Name: %s\n"
+                "  Crontab: %s\n"
+                "  Next expiry: %s\n"
+                "  Remember next: %s\n"
+                "  Disable: %s\n",
+                LOG_STR_ARG(schedule_name.c_str()), LOG_STR_ARG(getCrontab().c_str()),
+                LOG_STR_ARG(nextExpiryString("---").c_str()),
+                YESNO(getRememberNext()), YESNO(getBypass()));
   }
 
 

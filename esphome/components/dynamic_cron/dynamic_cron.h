@@ -45,6 +45,7 @@ protected:
   std::time_t   next_expiry;
   bool          bypass;
   bool          remember_next;
+  bool          now_is_invalid;
   std::string   id_hash;
   std::string   bad_cron_expr;
   std::string   time_format;
@@ -96,6 +97,7 @@ public:
     bypass(false),
     bypass_default(false),
     remember_next(false),
+    now_is_invalid(true),
     remember_next_default(false),
     target_action_fptr(_target_action_fptr),
     id_hash(""),
@@ -192,6 +194,7 @@ public:
             remember_next,
             (long long)now
       );
+      now_is_invalid = true;
       return;
     }
     LOGV("setNextExpiry() --> timeIsValid(): TRUE");
@@ -208,7 +211,7 @@ public:
           (long long)now,
           timeToString(now).c_str()
     );
-    LOGI("Set next_expiry [%lld, %s]", (long long)next_expiry, timeToString(next_expiry).c_str());
+    LOGI("Set next_expiry [%lld, '%s']", (long long)next_expiry, timeToString(next_expiry).c_str());
   }
 
 
@@ -421,6 +424,7 @@ protected:
 
   // Gets next time_t, given cron expression(s) string in crontab.
   std::time_t calcNextExpiry(std::time_t ref_time) {
+    LOGI("calcNextExpiry %lld", (long long)ref_time);
     if (crontab.length() == 0 || ref_time == 0)
         return 0;
     size_t start = 0, end = 0;
@@ -454,7 +458,7 @@ protected:
       start = end + 3; // + " | ".length()
     }
     bad_cron_expr = "";
-    LOGD("calced expiry_time: %lld", (long long)expiry_time);    
+    LOGD("calced expiry_time: %lld", (long long)expiry_time);
     return expiry_time;
   }
 

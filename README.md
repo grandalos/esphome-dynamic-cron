@@ -49,11 +49,7 @@
   
   See below for more info on the Croncpp library.
   
-  There are three things to be aware of when using this library:
-  
-  * ~~The ESPHome firmware must be compiled using the Arduino framework, not the ESP-IDF framework.~~
-    Unofficially, DynamicCron no longer requires the Arduino framework,
-    however it has not yet been tested against the ESP-IDF framework.
+  Things to be aware of when using this library:
   
   * You should define a `time` component in your ESPHome yaml config, as
     scheduling software needs a reliable time source.
