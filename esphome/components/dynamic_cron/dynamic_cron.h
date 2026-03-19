@@ -45,7 +45,7 @@ protected:
   std::time_t   next_expiry;
   bool          bypass;
   bool          remember_next;
-  bool          now_is_invalid;
+  bool          expiry_recalc;
   std::string   id_hash;
   std::string   bad_cron_expr;
   std::string   time_format;
@@ -97,7 +97,7 @@ public:
     bypass(false),
     bypass_default(false),
     remember_next(false),
-    now_is_invalid(true),
+    expiry_recalc(true),
     remember_next_default(false),
     target_action_fptr(_target_action_fptr),
     id_hash(""),
@@ -194,7 +194,7 @@ public:
             remember_next,
             (long long)now
       );
-      now_is_invalid = true;
+      expiry_recalc = true;
       return;
     }
     LOGV("setNextExpiry() --> timeIsValid(): TRUE");
@@ -252,8 +252,6 @@ public:
         (long long)input,
         timeToString(input).c_str()
       );
-      // !!! what is this for??
-      setNextExpiry();
     }
   }
 
@@ -270,7 +268,8 @@ public:
   virtual std::string setCrontab(std::string str) {
     crontab = str;
     LOGI("Set crontab '%s'", crontab.c_str());
-    setNextExpiry();
+    expiry_recalc = true;
+    next_expiry = 0;
     return crontab;
   }
 
@@ -285,7 +284,8 @@ public:
   virtual bool setBypass(bool val) {
     bypass = val;
     LOGI("Set bypass '%d'", bypass);
-    setNextExpiry();
+    if (!bypass)
+        expiry_recalc = true;
     return val;
   }
 
@@ -356,13 +356,12 @@ public:
   //   https://stackoverflow.com/questions/18422384/how-to-print-time-t-in-a-specific-format
   static std::string timeToFormattedString(std::time_t timet, std::string _format = TIME_FORMAT) {
     if (timet != 0) {
-      struct tm * timetm;
+      struct tm timetm;
       // Converts time_t to tm (a fancy time object), cuz that's what strftime wants.
-      timetm = localtime(&timet);
+      localtime_r(&timet, &timetm);
       char str[24];
-      strftime(str, sizeof(str), _format.c_str(), timetm);
+      strftime(str, sizeof(str), _format.c_str(), &timetm);
 
-      //SLOGVV("dynamic_cron", "From inside timeToString() '%s'", str);
       return (std::string)str;
     }
     else {
@@ -418,13 +417,12 @@ protected:
     LOGI("%s cron schedule calling action(s)", schedule_name.c_str());
     bool result = target_action_fptr();
     if (result)
-      setNextExpiry();
+      expiry_recalc = true;
   }
 
 
   // Gets next time_t, given cron expression(s) string in crontab.
   std::time_t calcNextExpiry(std::time_t ref_time) {
-    LOGI("calcNextExpiry %lld", (long long)ref_time);
     if (crontab.length() == 0 || ref_time == 0)
         return 0;
     size_t start = 0, end = 0;
@@ -447,10 +445,8 @@ protected:
 
         return 0;
       }
-      LOGI("crontab parses");
       // !!! crashes here in 2026.3 days_to_year or thereabouts.
       std::time_t next = cron_next(&expr, ref_time);  // <--- never returns??
-      LOGD("calced next: %lld, (%lld)", (long long)next, (long long)expiry_time);
       if ((next != -1) && ((next < expiry_time) || (expiry_time == 0)))
         expiry_time = next;
       if (end == std::string::npos)
@@ -458,7 +454,6 @@ protected:
       start = end + 3; // + " | ".length()
     }
     bad_cron_expr = "";
-    LOGD("calced expiry_time: %lld", (long long)expiry_time);
     return expiry_time;
   }
 

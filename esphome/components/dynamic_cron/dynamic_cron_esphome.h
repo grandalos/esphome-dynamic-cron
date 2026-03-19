@@ -142,19 +142,19 @@ public:
     
     // Init NextExpiry prefs
     next_expiry_pref.init(schedule_id + "_next_expiry_" + std::to_string(initial_stamp));
-      if (remember_next && !bypass) {
-        next_expiry = next_expiry_pref.load_with_default(0);
-      } else {
-        next_expiry_pref.save(0);
+    if (remember_next && !bypass) {
+      next_expiry = next_expiry_pref.load_with_default(0);
+      if (!timeIsValid(next_expiry)) {
+        expiry_recalc = true;
         next_expiry = 0;
       }
+    } else {
+      next_expiry = 0;
+    }
 
     // Init Crontab prefs
     crontab_pref.init(schedule_id + "_crontab_" + std::to_string(initial_stamp));
     crontab = crontab_pref.load_with_default(crontab_default);
-
-    if (!timeIsValid(next_expiry))
-      setNextExpiry();
 
     // Push values to entity.
     updateEntityData(bypass_switch, last_bypass_state, getBypass());
@@ -169,23 +169,22 @@ public:
   void loop() override {
     std::time_t now = std::time(NULL);
     if (!timeIsValid(now)) {
-        now_is_invalid = true;
+        expiry_recalc = true;
         return;
     }
 
-    if (now_is_invalid) {
-        now_is_invalid = false;
+    if (next_expiry == 0 && expiry_recalc) {
+        expiry_recalc = false;
         setNextExpiry();
     }
 
-    if (next_expiry == 0)
-        return;
-
-    //LOGV("Looping: %li", now);
-
-    if (std::difftime(now, next_expiry) >= 0)
+    if (std::difftime(now, next_expiry) >= 0) {
+      next_expiry = 0;
+      expiry_recalc = true;
       cronAction();
+    }
 
+    // publish any state changes
     updateEntityData(bypass_switch, last_bypass_state, getBypass());
     updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
     updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
@@ -225,16 +224,12 @@ public:
   bool setRememberNext(bool val) override {
     bool rslt = ScheduleCore::setRememberNext(val);
     remember_next_pref.save(rslt);
-    // If remember_next is toggled, we always want to write something to next_expiry_pref,
-    // unless bypass is true (if bypass is true, next_expiry and next_expiry_pref should always be 0).
     updateEntityData(remember_next_switch, last_remember_next_state, rslt);
-    if (!bypass) {
-      if (remember_next == false) {
-        next_expiry_pref.save(0);
-      }
-      else {
-        next_expiry_pref.save(next_expiry);
-      }
+    if (remember_next == false) {
+      next_expiry_pref.save(0);
+    }
+    else if (!bypass) {
+      next_expiry_pref.save(next_expiry);
     }
     return rslt;
   }
