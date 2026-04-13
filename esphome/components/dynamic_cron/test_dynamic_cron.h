@@ -1,5 +1,12 @@
 #pragma once
 
+// This test file will run in the 'native' test environment, which doesn't
+// depend on any esp32 libraries or hardware.
+
+
+// Don't compile this file unless COMPILE_TESTS is defined.
+#ifdef COMPILE_TESTS
+
 #include <unity.h>
 //#include <typeinfo>
 #include "dynamic_cron.h"
@@ -35,17 +42,17 @@ public:
     return result;
   }
   
-  // Helper method to set cronnext with older time,
-  // since the official setCronNext() is protected.
-  void setCronNextRaw(std::time_t input) {
-    cronnext = input;
+  // Helper method to set next_expiry with older time,
+  // since the official setNextExpiry() is protected.
+  void setNextExpiryRaw(std::time_t input) {
+    next_expiry = input;
   }
 
-  // Cuz cronLoop() is protected.
-  void callCronLoop() {
-    cronLoop();
-  }    
-};
+  // Cuz cronAction() is protected.
+  void callCronAction() {
+    cronAction();
+  }
+};  // class ScheduleMock
 
 // Declards a ScheduleMock object with default constructor.
 // This will be used during each test run. See setUp().
@@ -84,70 +91,46 @@ void test_schedule_contains_schedules(void) {
   TEST_ASSERT_TRUE(ScheduleCore::Schedules().back() == ScheduleMockInst);
 }
 
-void test_schedule_calculates_cronnext(void) {
+void test_schedule_calculates_next_expiry(void) {
   ScheduleMockInst->setCrontab("1 2 3 * * *");
-  std::string cron_next = ScheduleMockInst->cronNextString();
+  std::string next_expiry = ScheduleMockInst->nextExpiryString();
   //std::string now = ScheduleMockInst->timeToString(); // What was this for?
-  std::string time_only = ScheduleMockInst->getStringVectorMember(cron_next, " ", 1);
+  std::string time_only = ScheduleMockInst->getStringVectorMember(next_expiry, " ", 1);
   // Test-message is not supported in the Unity framework provided with platformio.
   // Update: It now works!! Not sure why.
   //TEST_MESSAGE(now.c_str());
-  //TEST_MESSAGE(cron_next.c_str());
+  //TEST_MESSAGE(next_expiry.c_str());
   //TEST_MESSAGE(time_only.c_str());
   TEST_ASSERT_TRUE(time_only == "03:02:01");
   // Bad crontab should be handled
   ScheduleMockInst->setCrontab("1 2 3 * * * | foo bar baz");
-  TEST_ASSERT_TRUE(ScheduleMockInst->getCronNext() == (std::time_t)0);
+  TEST_ASSERT_TRUE(ScheduleMockInst->getNextExpiry() == (std::time_t)0);
   // Fixed crontab should resolve
   ScheduleMockInst->setCrontab("1 2 3 * * *");
-  TEST_ASSERT_TRUE(ScheduleMockInst->getCronNext() > (std::time_t)0);
-  // Bypassed schedule should have no cronnext
+  TEST_ASSERT_TRUE(ScheduleMockInst->getNextExpiry() > (std::time_t)0);
+  // Bypassed schedule should have no next_expiry
   ScheduleMockInst->setBypass(true);
-  TEST_ASSERT_TRUE(ScheduleMockInst->getCronNext() == (std::time_t)0);
+  TEST_ASSERT_TRUE(ScheduleMockInst->getNextExpiry() == (std::time_t)0);
   // Re-enabled schedule should resolve
   ScheduleMockInst->setBypass(false);
-  TEST_ASSERT_TRUE(ScheduleMockInst->getCronNext() > (std::time_t)0);
+  TEST_ASSERT_TRUE(ScheduleMockInst->getNextExpiry() > (std::time_t)0);
 }
 
-void test_schedule_cronNextExpired(void) {
+void test_schedule_cronAction(void) {
   ScheduleMockInst->setCrontab("1 2 3 * * *");
-  // Default cronnext should be legit.
-  TEST_ASSERT_FALSE(ScheduleMockInst->cronNextExpired());
-  // Old cronnext should be considered expired.
+  // next_expiry should have changed (and lambda should have been called).
   std::time_t old_time = ScheduleMockInst->stringToTime("2020-01-01 12:34:56");
-  ScheduleMockInst->setCronNextRaw(old_time);
-  TEST_ASSERT_TRUE(ScheduleMockInst->cronNextExpired());
-  // Missing crontab prevents expired from returning true, even if cronnext is expired.
-  // Do we really want that?
-  ScheduleMockInst->setCrontab("");
-  TEST_ASSERT_FALSE(ScheduleMockInst->cronNextExpired());
-  // setCronNext() with an old time is not legit user operation and will be filtered out.
-  // resulting in legit cronnext.
-  ScheduleMockInst->setCrontab("1 2 3 * * *");
-  ScheduleMockInst->setCronNext(old_time);
-  TEST_ASSERT_FALSE(ScheduleMockInst->cronNextExpired());
-}
-
-void test_schedule_cronLoop(void) {
-  // cronnext should not have changed (and lambda should not have been called).
-  ScheduleMockInst->setCrontab("1 2 3 * * *");
-  std::time_t cronnext1 = ScheduleMockInst->getCronNext();
-  ScheduleMockInst->callCronLoop();
-  std::time_t cronnext2 = ScheduleMockInst->getCronNext();
-  TEST_ASSERT_TRUE(std::difftime(cronnext1, cronnext2) == 0);
-  // cronnext should have changed (and lambda should have been called).
-  std::time_t old_time = ScheduleMockInst->stringToTime("2020-01-01 12:34:56");
-  ScheduleMockInst->setCronNextRaw(old_time);
-  ScheduleMockInst->callCronLoop();
-  std::time_t new_time = ScheduleMockInst->getCronNext();
+  ScheduleMockInst->setNextExpiryRaw(old_time);
+  ScheduleMockInst->callCronAction();
+  std::time_t new_time = ScheduleMockInst->getNextExpiry();
   TEST_ASSERT_TRUE(std::difftime(new_time, old_time) > 0);
 }
 
 
 // RUNNER
 
-int TEST_RUN_COUNT = 0;
-int TEST_RUN_MAX   = 1;
+// int TEST_RUN_COUNT = 0;
+// int TEST_RUN_MAX   = 1;
 
 int DynamicCronTestRunner(void) {
   std::cout << "BEGIN DYNAMIC CRON TESTS\n";
@@ -158,14 +141,16 @@ int DynamicCronTestRunner(void) {
   RUN_TEST(test_schedule_receives_id);
   RUN_TEST(test_schedule_receives_lambda);
   RUN_TEST(test_schedule_contains_schedules);
-  RUN_TEST(test_schedule_calculates_cronnext);
-  RUN_TEST(test_schedule_cronNextExpired);
-  RUN_TEST(test_schedule_cronLoop);
+  RUN_TEST(test_schedule_calculates_next_expiry);
+  RUN_TEST(test_schedule_cronAction);
 
   // Runs these tests in esp environment and esphome build.
   #if !defined(IS_NATIVE) || IS_NATIVE != 1
-    RUN_TEST(test_prefs_initialized);
-    RUN_TEST(test_prefs_matches_timestamp);
+    RUN_TEST(test_prefs_initial);
+    RUN_TEST(test_prefs_preserve_existing);
+    RUN_TEST(test_prefs_clear_existing);
+    RUN_TEST(test_prefs_unchanged);
+    RUN_TEST(test_bypass_prefs);
     RUN_TEST(test_inherited_logger_methods);
   #endif
   
@@ -178,15 +163,21 @@ int DynamicCronTestRunner(void) {
   return UNITY_END();
 }
 
-int RunDynamicCronTests(int max = 0) {
-  if (max > 0) { TEST_RUN_MAX = max; }
+// int RunDynamicCronTests(int max = 0) {
+//   if (max > 0) { TEST_RUN_MAX = max; }
+// 
+//   if (TEST_RUN_COUNT < TEST_RUN_MAX) {
+//     TEST_RUN_COUNT += 1;
+//     return DynamicCronTestRunner();
+//   }
+//   else {
+//     return 1;
+//   }
+// }
 
-  if (TEST_RUN_COUNT < TEST_RUN_MAX) {
-    TEST_RUN_COUNT += 1;
-    return DynamicCronTestRunner();
-  }
-  else {
-    return 1;
+void RunDynamicCronTests(int max = 1) {
+  for (int i = 0; i < max; i++) {
+    DynamicCronTestRunner();
   }
 }
 
@@ -199,7 +190,7 @@ int RunDynamicCronTests(int max = 0) {
 // These must be top-level functions.
 
 void setUp(void) {
-  // Performed before ever test is run.
+  // Performed before every test is run.
   
   //std::cout << "SETUP\n";
   
@@ -219,3 +210,5 @@ void tearDown(void) {
   delete esphome::dynamic_cron::ScheduleMockInst;
 }
 
+
+#endif  // COMPILE_TESTS

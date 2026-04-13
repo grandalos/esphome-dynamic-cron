@@ -1,11 +1,7 @@
 //
-// TODO: Consider saving the prefs object within the Schedule, instead of loading it up every run though the loop.
-//       Then compare Schedule fields against that prefs object, instead of against a new prefs object every time
-//       through the loop. Then whenever you save anything to prefs NVS, get a new prefs object to store in the Schedule.
-//
-// TODO: The cronnext value showing in esphome, after an OTA update, is incorrect,
+// TODO: The next_expiry value showing in esphome, after an OTA update, is incorrect,
 //       until the crontab string is changed, or the device is rebooted.
-//       Note that the optional display of the multiple cronnext values is NOT incorrect
+//       Note that the optional display of the multiple next_expiry values is NOT incorrect
 //       at any point during this issue.
 //       It is not known if the actual next-start-time is incorrect, or if this is a display issue.
 //
@@ -14,19 +10,19 @@
 
 #pragma once
 
-#include "Arduino.h"
 #include <iostream>
 #include <string>
-#include <Preferences.h>
 #include <ctime>
 
 #include "esphome/core/component.h"
 #include "esphome/core/application.h"
 #include "esphome/core/time.h"
+#include "esphome/core/preferences.h"
 #include "esphome/components/switch/switch.h"
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/text/text.h"
 
+#include "preference_wrapper.h"
 #include "dynamic_cron.h"
 
 
@@ -42,33 +38,41 @@ namespace dynamic_cron {
 //
 class BypassSwitch;
 class RememberNextSwitch;
-class CronNextSensor;
+class NextExpirySensor;
 class CrontabText;
+
+inline const size_t                    CRONTAB_MAX_LEN = 128;
+
+// Static variable to track if the version has been logged at boot.
+static bool                            version_logged = false;
+
 
 
 class Schedule : public Component, public ScheduleCore {
 
 protected:
   // If true, clears prefs at first boot after flash.
-  bool                clear_prefs;
+  bool                                 clear_prefs;
   
-  std::time_t         cron_loop_previous_time;
-  std::time_t         save_prefs_previous_time;
-    
+  // Preference set timestamp
+  std::time_t                          initial_stamp;
+  
+  // Preference objects
+  MyPreference<std::time_t>            initial_stamp_pref;
+  MyPreference<bool>                   bypass_pref;
+  MyPreference<bool>                   remember_next_pref;
+  MyPreference<std::time_t>            next_expiry_pref;
+  StringPreference<CRONTAB_MAX_LEN>    crontab_pref;
+
 public:
-  double              cron_loop_interval; // seconds
-  double              save_prefs_interval; // seconds
   
   // These hold pointers to the subcomponents.
-  BypassSwitch        *bypass_switch{nullptr};
-  RememberNextSwitch  *remember_next_switch{nullptr};
-  CronNextSensor      *cron_next_sensor{nullptr};
-  CrontabText         *crontab_text{nullptr};
-  //   
-  //   switch_::Switch            *bypass_switch{nullptr};
-  //   switch_::Switch            *remember_next_switch{nullptr};
-  //   text_sensor::TextSensor   *cron_next_sensor{nullptr};
-  //   text::Text                *crontab_text{nullptr};
+  BypassSwitch                         *bypass_switch{nullptr};
+  RememberNextSwitch                   *remember_next_switch{nullptr};
+  NextExpirySensor                     *next_expiry_sensor{nullptr};
+  // TODO: Change CrontabText and crontab_text to CrontabTextField, crontab_text_field
+  // Don't forget to update __init__.py
+  CrontabText                          *crontab_text{nullptr};
   
   // Macro for defining setters for the above entity pointer variables.
   #define DEFINE_SETTER(MemberType, MemberName) \
@@ -76,13 +80,13 @@ public:
     
   DEFINE_SETTER(BypassSwitch, bypass_switch)
   DEFINE_SETTER(RememberNextSwitch, remember_next_switch)
-  DEFINE_SETTER(CronNextSensor, cron_next_sensor)
+  DEFINE_SETTER(NextExpirySensor, next_expiry_sensor)
   DEFINE_SETTER(CrontabText, crontab_text)
   
-  bool                      last_bypass_state = 0;
-  bool                      last_remember_next_state = 0;
-  std::string               last_cron_next_state = "";
-  std::string               last_crontab_text_state = "";
+  bool                                 last_bypass_state;
+  bool                                 last_remember_next_state;
+  std::string                          last_next_expiry_state;
+  std::string                          last_crontab_text_state;
   
   // Custom constructor method to create Schedule object.
   // NOTE: The function-pointer argument must have NO captures, if it's receiving a lambda.
@@ -95,73 +99,110 @@ public:
     bool(*_target_action_fptr)()
   ) :
     ScheduleCore(_name, _id, _target_action_fptr),
-    cron_loop_interval(10),
-    save_prefs_interval(60),
-    clear_prefs(false)
+    clear_prefs(false),
+    last_bypass_state(false),
+    last_remember_next_state(false),
+    last_next_expiry_state(""),
+    last_crontab_text_state("")
   {
-    LOGI("Initializing cron schedule '%s' %s", _name.c_str(), _id.c_str());
-    cron_loop_previous_time = std::time(NULL);
-    save_prefs_previous_time = std::time(NULL);
-  } // end Schedule(...).
+    LOGI("Constructing cron schedule '%s' %s", _name.c_str(), _id.c_str());
+  } // constructor.
 
 
   // Esphome Component overrides
   void setup() override {
-    // Disable for production
-    //printVersion();
-    //LOGV("About to call timeIsValid() in Schedule.setup()");
-    
-    if (timeIsValid() && !setup_complete) {
-      loadPrefs();
-
-      setup_complete = true;
-
-      LOGV("Setup completed for '%s' %s %s", schedule_name.c_str(), schedule_id.c_str(), id_hash.c_str());
-      if (! timeIsValid(cronnext)) {
-        setCronNext();
-      }
+    if (!version_logged) {
+      printVersion();
+      version_logged = true;
     }
-  }
+
+    LOGD("Setup beginning for '%s' %s", schedule_name.c_str(), schedule_id.c_str());
+    
+    // Init prefs timestamp
+    initial_stamp_pref.init(schedule_id);
+    initial_stamp = initial_stamp_pref.load_with_default(TIMESTAMP);
+    if (initial_stamp != TIMESTAMP &&
+        (
+          clear_prefs ||
+          TIMESTAMP == 0 ||
+          difftime(TIMESTAMP, initial_stamp) < 0
+        )
+    ) {
+      initial_stamp = TIMESTAMP;
+      initial_stamp_pref.save(initial_stamp);
+    }
+    
+    // Init Bypass prefs
+    bypass_pref.init(schedule_id + "_bypass_" + std::to_string(initial_stamp));
+    bypass = bypass_pref.load_with_default(bypass_default);
+    
+    // Init RememberNext prefs
+    remember_next_pref.init(schedule_id + "_remember_" + std::to_string(initial_stamp));
+    remember_next = remember_next_pref.load_with_default(remember_next_default);
+    
+    // Init NextExpiry prefs
+    next_expiry_pref.init(schedule_id + "_next_expiry_" + std::to_string(initial_stamp));
+    if (remember_next && !bypass) {
+      next_expiry = next_expiry_pref.load_with_default(0);
+      if (!timeIsValid(next_expiry)) {
+        expiry_recalc = true;
+        next_expiry = 0;
+      }
+    } else {
+      next_expiry = 0;
+    }
+
+    // Init Crontab prefs
+    crontab_pref.init(schedule_id + "_crontab_" + std::to_string(initial_stamp));
+    crontab = crontab_pref.load_with_default(crontab_default);
+
+    // Push values to entity.
+    updateEntityData(bypass_switch, last_bypass_state, getBypass());
+    updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
+    updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
+    updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
+
+    LOGD("[setup()] Setup complete for '%s' %s", schedule_name.c_str(), schedule_id.c_str());
+  } // setup()
   
   
   void loop() override {
     std::time_t now = std::time(NULL);
-    double seconds_since_last_cron_loop = difftime(now, cron_loop_previous_time);
-    double seconds_since_last_save      = difftime(now, save_prefs_previous_time);
-  
-    if (setup_complete && timeIsValid()) {
-      //LOGV("Looping: %lld", (long long)now);
-      if (seconds_since_last_cron_loop > cron_loop_interval) {
-        cronLoop();
-        cron_loop_previous_time = std::time(NULL);
-      }
-      
-      if (seconds_since_last_save > save_prefs_interval) {
-        savePrefs();
-        save_prefs_previous_time = std::time(NULL);
-      }
+    if (!timeIsValid(now)) {
+        expiry_recalc = true;
+        return;
     }
-    
-    else {
-      if (seconds_since_last_cron_loop > cron_loop_interval) {
-        setup();
-        cron_loop_previous_time = std::time(NULL);
-      }
+
+    if (next_expiry == 0 && expiry_recalc) {
+        expiry_recalc = false;
+        setNextExpiry();
     }
-    
+
+    if (std::difftime(now, next_expiry) >= 0) {
+      next_expiry = 0;
+      expiry_recalc = true;
+      cronAction();
+    }
+
+    // publish any state changes
     updateEntityData(bypass_switch, last_bypass_state, getBypass());
     updateEntityData(remember_next_switch, last_remember_next_state, getRememberNext());
-    updateEntityData(cron_next_sensor, last_cron_next_state, cronNextString("---"));
+    updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
     updateEntityData(crontab_text, last_crontab_text_state, getCrontab());
   }
-  
-  
+
+
   void dump_config() override {
-    // This method will trigger once for each schedule loaded by esphome,
-    // but it does not trigger when running the tests.
-    //
-    //ESP_LOGCONFIG(LOGTAG, "Dynamic Cron Schedule");
-    //LOGD("Dynamic Cron Schedule ");
+    ESP_LOGCONFIG(LOGTAG,
+                "Dynamic Cron Schedule:\n"
+                "  Name: %s\n"
+                "  Crontab: %s\n"
+                "  Next expiry: %s\n"
+                "  Remember next: %s\n"
+                "  Disable: %s\n",
+                LOG_STR_ARG(schedule_name.c_str()), LOG_STR_ARG(getCrontab().c_str()),
+                LOG_STR_ARG(nextExpiryString("---").c_str()),
+                YESNO(getRememberNext()), YESNO(getBypass()));
   }
 
 
@@ -170,261 +211,65 @@ public:
   }
   
   
+  // Overides base setters to include preference storage.
+  
+  bool setBypass(bool val) override {
+    // Note that sched-core setBypass() always calls setNextExpiry().
+    bool rslt = ScheduleCore::setBypass(val);
+    updateEntityData(bypass_switch, last_bypass_state, rslt);
+    bypass_pref.save(rslt);
+    return rslt;
+  }
+  
+  bool setRememberNext(bool val) override {
+    bool rslt = ScheduleCore::setRememberNext(val);
+    remember_next_pref.save(rslt);
+    updateEntityData(remember_next_switch, last_remember_next_state, rslt);
+    if (remember_next == false) {
+      next_expiry_pref.save(0);
+    }
+    else if (!bypass) {
+      next_expiry_pref.save(next_expiry);
+    }
+    return rslt;
+  }
+  
+  void setNextExpiry() override {
+    ScheduleCore::setNextExpiry();
+    updateEntityData(next_expiry_sensor, last_next_expiry_state, nextExpiryString("---"));
+    if (next_expiry == 0 || remember_next)
+        next_expiry_pref.save(next_expiry);
+  }
+  
+  std::string setCrontab(std::string str) override {
+    // Note that sched-core setCrontab() always calls setNextExpiry().
+    std::string rslt = ScheduleCore::setCrontab(str);
+    updateEntityData(crontab_text, last_crontab_text_state,rslt);
+    crontab_pref.save(rslt);
+    return rslt;
+  }
+  
+  // TODO: Handle 'setNextExpiry(std::time_t input)' signature, when we start using it.
+  
+  
 protected:
-  
-  // The SchedulePrefs class/struct instance should:
-  //   * Initialize prefs for this schedule.
-  //   * Retrieve data for all keys.
-  // Then use this object to:
-  //   * Set schedule fields from prefs.
-  //   * compare schedule fields with existing prefs, looking for changes.
-  // When an instance of SchedulePrefs is created, it should be passed the
-  // ScheduleCore instance, which should then be stored in the SchedulePrefs instance.
-  //
-  // For list of Preferences data types see:
-  //   https://docs.espressif.com/projects/arduino-esp32/en/latest/tutorials/preferences.html
-  //
-  // For list of C format specifiers (for printf, etc.) see:
-  //   https://www.geeksforgeeks.org/format-specifiers-in-c/
-  //
-  // For linux epoch converter see: https://www.epochconverter.com/
-  //
-  // Note that this SchedulePrefs class/struct is a sub class defined within the Schedule class.
-  // As such, it has certain specific and privileged behavior with regards to the parent Schedule class.
-  //
-  struct SchedulePrefs : public LoggerLocal<SchedulePrefs> {
-    
-  public:
-    Preferences   api;
-    Schedule*     schedule;
-    
-    std::time_t   initialized;  // TIMESTAMP of firmware in seconds-since-epoch at compile time (from __init__.py).
-                                // TIMESTAMP is hardcoded in python at firmware compile time.
-                                // TIMESTAMP is declared in dynamic_cron.h, using 'inline'.
-                                // TIMESTAMP is defined in main.cpp at the top (not any more).
-                                // TIMESTAMP is assigned in main.cpp in the setup() function.
-    std::string   crontab;
-    bool          remember_next;
-    bool          bypass;
-    std::time_t   cronnext;
-    
-    SchedulePrefs(Schedule* _schedule) :
-      schedule(_schedule)
-    {
-      initialize();
-      load();
-    }
-    
-    // Does this need to return a bool, or can it be void?
-    bool initialize(bool force = false) {  // We're not using 'force' yet
-      LOGV("Opening prefs %s %s for initialization", schedule->schedule_id.c_str(), schedule->id_hash.c_str());
-
-      api.begin(schedule->id_hash.c_str(), false); // open prefs read-write
-      
-      if (TIMESTAMP == 0) {
-        LOGW(
-          "Firmware TIMESTAMP == 0 and could prevent proper management of schedule preferences between firmware flashes",
-          NULL
-        );
-      }
-      
-      // Initializes namespace timestamp, if not already done.
-      
-      if (! api.isKey("initialized")) {
-        LOGI("Initializing prefs namespace %s %s with stamp '%lld'",
-          schedule->schedule_id.c_str(),
-          schedule->id_hash.c_str(),
-          (long long)TIMESTAMP
-        );
-        
-        // Sets the 'initialized' preference field to TIMESTAMP (seconds, from __init__.py).
-        api.putLong64("initialized", TIMESTAMP);
-        
-        size_t number_free_entries = api.freeEntries();
-        LOGD("There are %u free entries available in the namespace table %s",
-          number_free_entries,
-          schedule->id_hash.c_str()
-        );
-      }
-      
-      // Retrieves the preference 'initialized' field.
-      initialized = api.getLong64("initialized", 0);
-
-      // Clears preferences namespace, if conditions allow.
-      //
-      // Note that logically: !(x | y) == (!x & !y)
-      //
-      bool rslt = false;
-      if (force == true || schedule->clear_prefs == true && TIMESTAMP != 0 && initialized != TIMESTAMP) {
-        rslt = api.clear(); // && api.putLong64("initialized", TIMESTAMP);
-        if (rslt) {
-          LOGI("Re-initialized prefs namespace %s %s with stamp '%lld'",
-            schedule->schedule_id.c_str(),
-            schedule->id_hash.c_str(),
-            (long long)TIMESTAMP
-          );
-        }
-      }
-      
-      // Updates 'initialized' if different from TIMESTAMP.
-      if (TIMESTAMP != 0 && initialized != TIMESTAMP) {
-        api.putLong64("initialized", TIMESTAMP);
-        initialized = api.getLong64("initialized", 0);
-        
-        LOGI("Updated prefs namespace %s %s with stamp '%lld'",
-          schedule->schedule_id.c_str(),
-          schedule->id_hash.c_str(),
-          (long long)initialized
-        );
-      }
-            
-      // Initializes data fields with defaults.
-      
-      if (! api.isKey("crontab")) {
-        api.putString("crontab", String(schedule->crontab_default));
-      }
-      
-      if (! api.isKey("remember_next")) {
-        api.putBool("remember_next", schedule->remember_next_default);
-      }
-      
-      if (! api.isKey("bypass")) {
-        api.putBool("bypass", schedule->bypass_default);
-      }
-      
-      if (! api.isKey("cronnext")) {
-        api.putLong64("cronnext", 0);
-      }
-
-      api.end();
-      return rslt;
-      
-    } // initialize()
-    
-    
-    // Loads stored prefs into local variables.
-    void load() {
-      LOGV("Opening prefs %s for reading", schedule->id_hash.c_str());
-      api.begin(schedule->id_hash.c_str(), true); // open prefs read-only
-      
-      LOGV("Reading crontab from prefs");
-      crontab = api.getString("crontab", schedule->crontab_default).c_str();
-
-      LOGV("Reading remember_next from prefs");
-      remember_next = api.getBool("remember_next", schedule->remember_next_default);
-
-      LOGV("Reading bypass from prefs");
-      bypass = api.getBool("bypass", schedule->bypass_default);
-
-      LOGV("Reading cronnext from prefs");
-      cronnext = (std::time_t) api.getLong64("cronnext", 0);
-
-      api.end();
-    }
-  }; // SchedulePrefs struct
-  
-  
-  // Loads persistent data from SchedulePrefs vars into Schedule vars.
-  SchedulePrefs loadPrefs() {
-    LOGV("Beginning loadPrefs()");
-
-    SchedulePrefs prefs = SchedulePrefs(this);
-    
-    crontab = prefs.crontab;
-    remember_next = prefs.remember_next;
-    bypass = prefs.bypass;
-
-    if (remember_next && !bypass) {
-      cronnext = prefs.cronnext;
-    } else {
-      cronnext = 0;
-    }
-
-    LOGD("Loaded crontab: %s", crontab.c_str());
-    LOGD("Loaded remember_next: %d", remember_next);
-    LOGD("Loaded cronnext: %lld (%s)", (long long)cronnext, timeToString(cronnext).c_str());
-    LOGD("Loaded bypass: %d", bypass);
-    
-    return prefs;
-    
-  } // loadPrefs()
-  
-  
-  // Saves persistent data to esp32 NVS.
-  void savePrefs() {
-    SchedulePrefs prefs = SchedulePrefs(this);
-    
-    bool crontab_changed = (crontab != prefs.crontab);
-    bool remember_next_changed = (remember_next != prefs.remember_next);
-    bool cronnext_changed = (cronnext != prefs.cronnext && remember_next && !bypass);
-    bool bypass_changed = (bypass != prefs.bypass);
-
-    // If any changes, then open prefs for writing.
-    if (crontab_changed || remember_next_changed || cronnext_changed || bypass_changed) {
-      
-      Preferences api;
-
-      LOGD("Opening prefs %s %s for writing", schedule_id.c_str(), id_hash.c_str());
-      api.begin(id_hash.c_str(), false); // open as read/write
-
-      if (crontab_changed) {
-        LOGI("Saving crontab to prefs: '%s'", crontab.c_str());
-        api.putString("crontab", String(crontab.c_str()));
-      }
-
-      if (remember_next_changed) {
-        LOGI("Saving remember_next to prefs: %d", remember_next);
-        api.putBool("remember_next", remember_next);
-      }
-
-      if (cronnext_changed) {
-        LOGI("Saving cronnext to prefs: %lld", (long long)cronnext);
-        api.putLong64("cronnext", cronnext);
-      }
-
-      if (bypass_changed) {
-        LOGI("Saving bypass to prefs: %i", bypass);
-        api.putBool("bypass", bypass);
-      }
-
-      api.end();
-
-    } // if any changes
-  } // savePrefs()
-  
   
   // Wrapper around ScheduleCore::timeIsValid()
   // Adds validating time against ESPTime
-  //
-  // NOTE: All callable log lines in this method could run many
-  //       times per second, if conditions permit. Only enable
-  //       them if necessary for debugging.
-  //
   bool timeIsValid(std::time_t now = std::time(NULL)) {
-    //LOGV("Schedule::timeIsValid() calling ESPTime::from_epoch_local()");
+    if (!ScheduleCore::timeIsValid(now))
+        return false;
     ESPTime esp_time = ESPTime::from_epoch_local(now);
-
-    //LOGV("Schedule::timeIsValid() calling esp_time.is_valid()");
-    bool rslt_esp = esp_time.is_valid();
-
-    //LOGV("Schedule::timeIsValid() calling ScheduleCore::timeIsValid()");
-    bool rslt_parent = ScheduleCore::timeIsValid(now);
-    bool rslt_final = rslt_parent && rslt_esp;
-    
-    // What is this for?
-    //     if (rslt_final) {
-    //       LOGV("timeIsValid() using additional check with ESPTime: %d", rslt_final);
-    //     } else {
-    //       LOGV("timeIsValid() using additional check with ESPTime: %d", rslt_final);
-    //     }
-    
-    return rslt_final;
+    return esp_time.is_valid();
   }
   
-  
+  // Method template to update each entity only when data has changed.
+  // Call this in the Schedule loop.
+  //
   template<typename EntityT, typename StateT>
   void updateEntityData(EntityT *entity, StateT &last_state, const StateT &new_state) {
-    if (!entity) return;  // guard against null
+    if (!entity)
+        return;  // guard against null
     if (new_state != last_state) {
       entity->publish_state(new_state);
       last_state = new_state;
@@ -445,13 +290,12 @@ class BypassSwitch : public switch_::Switch, public Component, public LoggerLoca
 public:
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
   Schedule *schedule{nullptr};
-  bool last_state{0};
+  bool last_state{false};
   
   void setup() override {
     //set_disabled_by_default(false);
-    set_icon("mdi:timer-off-outline");
+    //set_icon("mdi:timer-off-outline");
     // set_restore_mode(switch_::SWITCH_RESTORE_DISABLED);
-    LOGV("get_object_id(): %s", get_object_id().c_str());
   }
   
   void set_schedule(Schedule *_schedule) {
@@ -470,13 +314,12 @@ class RememberNextSwitch : public switch_::Switch, public Component, public Logg
 public:
   
   Schedule *schedule{nullptr};
-  bool last_state{0};
+  bool last_state{false};
 
   void setup() override {
     //set_disabled_by_default(false);
-    set_icon("mdi:memory");
+    //set_icon("mdi:memory");
     //set_restore_mode(switch_::SWITCH_RESTORE_DISABLED);
-    LOGV("get_object_id(): %s", get_object_id().c_str());
   }
 
   void set_schedule(Schedule *_schedule) {
@@ -491,7 +334,7 @@ public:
 }; // RememberNextSwitch class
 
 
-class CronNextSensor : public text_sensor::TextSensor, public Component, public LoggerLocal<CronNextSensor> {
+class NextExpirySensor : public text_sensor::TextSensor, public Component, public LoggerLocal<NextExpirySensor> {
 public:
   
   Schedule *schedule{nullptr};
@@ -499,15 +342,14 @@ public:
 
   void setup() override {
     //set_disabled_by_default(false);
-    set_icon("mdi:timer-outline");
-    LOGV("get_object_id(): %s", get_object_id().c_str());
+    //set_icon("mdi:timer-outline");
   }
   
   void set_schedule(Schedule *_schedule) {
     schedule = _schedule;
   }
 
-}; // CronNextSensor class
+}; // NextExpirySensor class
 
 
 class CrontabText : public text::Text, public Component, public LoggerLocal<CrontabText> {
@@ -518,11 +360,10 @@ public:
 
   void setup() override {
     //set_disabled_by_default(false);
-    set_icon("mdi:calendar-clock-outline");
+    //set_icon("mdi:calendar-clock-outline");
     traits.set_min_length(0);
-    traits.set_max_length(255);
+    traits.set_max_length(CRONTAB_MAX_LEN);
     traits.set_mode(text::TEXT_MODE_TEXT);
-    LOGV("get_object_id(): %s", get_object_id().c_str());
   }
 
   void set_schedule(Schedule *_schedule) {
