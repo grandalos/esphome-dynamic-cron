@@ -1,4 +1,5 @@
 from time import time
+import yaml
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import switch, text, text_sensor
@@ -8,9 +9,9 @@ from esphome.const import (
                       CONF_LAMBDA,
                       CONF_NAME,
                       CONF_MODE,
-                      )
+                      CONF_ICON,
+                    )
 
-import yaml
 
 # Imports do not load files or paths into the build directory.                          
 # You need to use AUTO_LOAD.
@@ -26,47 +27,32 @@ CONF_TIME_FORMAT   = 'time_format'
 
 CONF_BYPASS_SWITCH        = "disabled_switch"
 CONF_REMEMBER_NEXT_SWITCH = "remember_next_switch"
-CONF_CRON_NEXT_SENSOR     = "cron_next_sensor"
+CONF_NEXT_EXPIRY_SENSOR   = "next_expiry_sensor"
 CONF_CRONTAB_TEXT         = "crontab_text"
 
-# ESPHome 2025... appears to run on c++17 or maybe even c++20,
-# so we don't need to modify that here.
-#
-# cg.add_build_flag("-std=gnu++17")
+
+### cg.add() puts code at top of main.cpp setup() function.
+### cg.add_global() puts code at top of main.cpp.
+
+# But not with ccronexpr
 # cg.add_build_flag("-fexceptions")
-# cg.add_platformio_option("build_unflags", ["-fno-exceptions", "-std=gnu++11"])
-#
-# We do still need the -fexceptions however.
-#
-cg.add_build_flag("-fexceptions")
-cg.add_platformio_option("build_unflags", ["-fno-exceptions"])
+# cg.add_platformio_option("build_unflags", ["-fno-exceptions"])
 
+# Pin ccronexpr to a revision with the March 2026 DST/local-time fixes.
 cg.add_library(
-    name="Croncpp",
-    repository="https://github.com/mariusbancila/croncpp.git",
+    name="ccronexpr",
+    repository="https://github.com/warthog618/ccronexpr.git#c58530e",
     version=None,
 )
+cg.add_build_flag("-DCRON_STRICT_MATCH")
 
-cg.add_library(
-    name="Preferences",
-    repository=None,
-    version=None,
-)
-
-# We need this, if we want to build/load/run Unity tests withing esphome firmware.
-cg.add_library(
-    name="Unity",
-    #repository="https://github.com/ThrowTheSwitch/Unity.git",
-    repository=None,
-    version="^2.5.2",
-)
 
 dynamiccron_ns      = cg.esphome_ns.namespace('dynamic_cron')
 Schedule            = dynamiccron_ns.class_('Schedule', cg.Component)
 
 BypassSwitch        = dynamiccron_ns.class_('BypassSwitch', switch.Switch, cg.Component)
 RememberNextSwitch  = dynamiccron_ns.class_('RememberNextSwitch', switch.Switch, cg.Component)
-CronNextSensor      = dynamiccron_ns.class_('CronNextSensor', text_sensor.TextSensor, cg.Component)
+NextExpirySensor    = dynamiccron_ns.class_('NextExpirySensor', text_sensor.TextSensor, cg.Component)
 CrontabText         = dynamiccron_ns.class_('CrontabText', text.Text, cg.Component)
 
 
@@ -79,20 +65,20 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_CRONTAB, default=""):             cv.string,
     cv.Optional(CONF_CLEAR_PREFS, default=False):      cv.boolean,
     cv.Optional(CONF_TIME_FORMAT, default=""):         cv.string,
+    # TODO: Convert this to a var CONF_FEATURE_SET
+    cv.Optional("feature_set", default="basic"):       cv.string,
     
-    # TODO: Refactor default entity icons.
-    # Supposedly, I can add defaults after the class name, like this:
-    #   switch.switch_schema(BypassSwitch, icon="mdi:chip")
-    #
     cv.Optional(CONF_BYPASS_SWITCH): switch.switch_schema(BypassSwitch),
     cv.Optional(CONF_REMEMBER_NEXT_SWITCH): switch.switch_schema(RememberNextSwitch),
-    cv.Optional(CONF_CRON_NEXT_SENSOR): text_sensor.text_sensor_schema(CronNextSensor),
+    cv.Optional(CONF_NEXT_EXPIRY_SENSOR): text_sensor.text_sensor_schema(NextExpirySensor),
     cv.Optional(CONF_CRONTAB_TEXT): text.text_schema(CrontabText),
 }).extend(cv.COMPONENT_SCHEMA)
 
 
-### cg.add() puts code at top of main.cpp setup() function.
-### cg.add_global() puts code at top of main.cpp.
+# --- Global state for managing build_src_filter ---
+_feature_set = "basic"
+_sources_configured = False
+
 
 # This is a timestamp of when the firmware was built. We use it to make decisions
 # during the Preferences initialization functions during the first-boot after flashing.
@@ -102,19 +88,42 @@ CONFIG_SCHEMA = cv.Schema({
 assign_global_timestamp = cg.RawStatement(f'esphome::dynamic_cron::TIMESTAMP = {round(time())};\n')
 cg.add(assign_global_timestamp)
 
-# This won't print at the beginning of the main.cpp setup() function, loggin not setup yet.
-print_version = cg.RawStatement(f'esphome::dynamic_cron::printVersion();\n')
-cg.add(print_version)
+# This won't print proprtly at the beginning of the main.cpp setup() function.
+#print_version = cg.RawStatement(f'esphome::dynamic_cron::printVersion();\n')
+#cg.add(print_version)
 
+# For debugging.
 # print(CONFIG_SCHEMA)
 # print(yaml.dump(CONFIG_SCHEMA, default_flow_style=False, sort_keys=False))
+
 
 # This gets called for each item in the dynamic_cron:[] array in the yaml config.
 #
 async def to_code(config):
-#     print("=== DYNAMIC_CRON to_code() START ===")
-#     print("raw validated config keys:", list(config.keys()))
-#     print("raw validated config repr:", config)
+    # print("=== DYNAMIC_CRON to_code() START ===")
+    # print("raw validated config keys:", list(config.keys()))
+    # print("raw validated config repr:", config)
+
+    global _feature_set, _sources_configured
+    
+    # Only configures sources once, using the first instance's feature_set.
+    # We need to do that, since there are global compilation settings,
+    # not per-instance component settings.
+    if not _sources_configured:
+        _feature_set = config.get("feature_set", "basic")
+
+        if _feature_set == "tests":
+            cg.add_define("COMPILE_TESTS")
+            
+            cg.add_library(
+                name="Unity",
+                #repository="https://github.com/ThrowTheSwitch/Unity.git",
+                repository=None,
+                version="^2.5.2",
+            )
+                        
+        _sources_configured = True
+
     
     schedule_name = str(config.get(CONF_NAME, config.get(CONF_ID)))
     
@@ -147,8 +156,7 @@ async def to_code(config):
     cg.add(var.setTimeFormatDefault(config[CONF_TIME_FORMAT]))
     
     
-    
-    ### Entities/Controls/Display ###
+    ###  ESPHome Entities/Controls/Display  ###
     
     # Bypass switch
     if CONF_BYPASS_SWITCH in config:
@@ -158,6 +166,7 @@ async def to_code(config):
       sw_config = {
         CONF_NAME:    f'{schedule_name} disabled',
         CONF_ID:      f'{id_}_disabled',
+        CONF_ICON:    "mdi:timer-off-outline"
       }
       sw_config = switch.switch_schema(BypassSwitch)(sw_config)
     
@@ -176,6 +185,7 @@ async def to_code(config):
       rem_config = {
         CONF_NAME:    f'{schedule_name} remember next',
         CONF_ID:      f'{id_}_remember_next',
+        CONF_ICON:    "mdi:memory"
       }
       rem_config = switch.switch_schema(RememberNextSwitch)(rem_config)
     
@@ -185,17 +195,18 @@ async def to_code(config):
     
     
     # Next Run sensor (display)
-    if CONF_CRON_NEXT_SENSOR in config:
-      ts_config = config[CONF_CRON_NEXT_SENSOR]
+    if CONF_NEXT_EXPIRY_SENSOR in config:
+      ts_config = config[CONF_NEXT_EXPIRY_SENSOR]
     else:
       ts_config = {
         CONF_NAME:    f'{schedule_name} next run',
         CONF_ID:      f'{id_}_next_run',
+        CONF_ICON:    "mdi:timer-outline"
       }
-      ts_config = text_sensor.text_sensor_schema(CronNextSensor)(ts_config)
+      ts_config = text_sensor.text_sensor_schema(NextExpirySensor)(ts_config)
     
     ts = await text_sensor.new_text_sensor(ts_config)
-    cg.add(var.set_cron_next_sensor(ts))
+    cg.add(var.set_next_expiry_sensor(ts))
     cg.add(ts.set_schedule(var))
     
     # Crontab text (data entry field)
@@ -206,6 +217,7 @@ async def to_code(config):
         CONF_NAME:    f'{schedule_name} crontab',
         CONF_ID:      f'{id_}_crontab',
         CONF_MODE:    'text',
+        CONF_ICON:    "mdi:calendar-clock-outline"
       }
       txt_config = text.text_schema(CrontabText)(txt_config)
     
