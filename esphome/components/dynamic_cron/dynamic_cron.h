@@ -410,6 +410,7 @@ protected:
   //   "0 0 8 * * *"
   //   "0 0 5,16 * * mon,tue,wed,thu,fri"
   //   "0 0 7 * * sat,sun"
+  //   "0 0,1 15,23 * * sat,sun"
   bool tryCalcSimpleDailyExpiry(const std::string &ctab, std::time_t ref_time, std::time_t &expiry_time) {
     auto split_fields = [](const std::string &input) -> std::vector<std::string> {
       std::vector<std::string> fields;
@@ -458,18 +459,18 @@ protected:
       }
       return out >= min_value && out <= max_value;
     };
-    auto parse_hours = [&](const std::string &field, std::vector<int> &hours) -> bool {
+    auto parse_number_list = [&](const std::string &field, int min_value, int max_value, std::vector<int> &values) -> bool {
       auto parts = split_csv(field);
       for (const auto &part : parts) {
         int parsed = 0;
-        if (!parse_int(part, 0, 23, parsed)) {
+        if (!parse_int(part, min_value, max_value, parsed)) {
           return false;
         }
-        hours.push_back(parsed);
+        values.push_back(parsed);
       }
-      std::sort(hours.begin(), hours.end());
-      hours.erase(std::unique(hours.begin(), hours.end()), hours.end());
-      return !hours.empty();
+      std::sort(values.begin(), values.end());
+      values.erase(std::unique(values.begin(), values.end()), values.end());
+      return !values.empty();
     };
     auto parse_dow = [&](const std::string &field, bool &any_day, std::vector<int> &days) -> bool {
       any_day = field == "*";
@@ -507,17 +508,20 @@ protected:
       return false;
     }
 
-    int sec = 0;
-    int min = 0;
-    if (!parse_int(fields[0], 0, 59, sec) || !parse_int(fields[1], 0, 59, min)) {
-      return false;
-    }
     if (fields[3] != "*" || fields[4] != "*") {
       return false;
     }
 
+    std::vector<int> seconds;
+    if (!parse_number_list(fields[0], 0, 59, seconds)) {
+      return false;
+    }
+    std::vector<int> minutes;
+    if (!parse_number_list(fields[1], 0, 59, minutes)) {
+      return false;
+    }
     std::vector<int> hours;
-    if (!parse_hours(fields[2], hours)) {
+    if (!parse_number_list(fields[2], 0, 23, hours)) {
       return false;
     }
     bool any_day = false;
@@ -576,22 +580,26 @@ protected:
       }
 
       for (int hour : hours) {
-        struct tm requested_tm = day_tm;
-        requested_tm.tm_hour = hour;
-        requested_tm.tm_min = min;
-        requested_tm.tm_sec = sec;
-        requested_tm.tm_isdst = -1;
+        for (int minute : minutes) {
+          for (int second : seconds) {
+            struct tm requested_tm = day_tm;
+            requested_tm.tm_hour = hour;
+            requested_tm.tm_min = minute;
+            requested_tm.tm_sec = second;
+            requested_tm.tm_isdst = -1;
 
-        std::time_t candidate = mktime(&requested_tm);
-        if (candidate == (std::time_t) -1) {
-          continue;
-        }
-        candidate = normalize_candidate(candidate, requested_tm);
-        if (std::difftime(candidate, ref_time) <= 0) {
-          continue;
-        }
-        if (best_candidate == 0 || candidate < best_candidate) {
-          best_candidate = candidate;
+            std::time_t candidate = mktime(&requested_tm);
+            if (candidate == (std::time_t) -1) {
+              continue;
+            }
+            candidate = normalize_candidate(candidate, requested_tm);
+            if (std::difftime(candidate, ref_time) <= 0) {
+              continue;
+            }
+            if (best_candidate == 0 || candidate < best_candidate) {
+              best_candidate = candidate;
+            }
+          }
         }
       }
     }
